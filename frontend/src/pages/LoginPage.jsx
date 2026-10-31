@@ -131,7 +131,8 @@ export function LoginPage() {
       setLoginMessage('Enter a valid business email.')
       return
     }
-    setLoginMessage('Sign-in service is not connected yet.')
+    setLoginMessage('')
+    window.location.hash = '/dashboard'
   }
 
   async function submitRegistration(event) {

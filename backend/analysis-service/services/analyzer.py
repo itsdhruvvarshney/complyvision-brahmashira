@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import tempfile
+import logging
 from pathlib import Path
 from typing import Any, Callable
 
@@ -14,6 +15,9 @@ from services.declaration_extractor import add_enhanced_report_fields, enhance_e
 from services.evidence import build_evidence_images, scrub_local_paths
 from services.mrp_extractor import correct_mrp
 from services.ocr_ensemble import run_ocr_ensemble
+
+
+LOGGER = logging.getLogger("uvicorn.error")
 
 
 class PackageAnalysisError(RuntimeError):
@@ -31,17 +35,34 @@ CORE_FIELDS = (
 
 
 def _default_ocr_factory() -> Any:
-    from paddleocr import PaddleOCR
+    try:
+        from paddleocr import PaddleOCR
 
-    # Preserve PaddleOCR's orientation handling because phone-captured packages
-    # are frequently sideways. Perspective unwarping remains disabled.
-    return PaddleOCR(
-        lang="en",
-        use_doc_orientation_classify=True,
-        use_doc_unwarping=False,
-        use_textline_orientation=True,
-        enable_mkldnn=False,
-    )
+        # Preserve PaddleOCR's orientation handling because phone-captured packages
+        # are frequently sideways. Perspective unwarping remains disabled.
+        return PaddleOCR(
+            lang="en",
+            use_doc_orientation_classify=True,
+            use_doc_unwarping=False,
+            use_textline_orientation=True,
+            enable_mkldnn=False,
+        )
+    except Exception as paddle_error:
+        # Paddle wheels are not available for every local Python/OS combination
+        # (notably newer Python releases). RapidOCR is already a supported engine
+        # for the hosted service and gives local development the same OCR path.
+        LOGGER.warning(
+            "PaddleOCR could not be initialized; falling back to RapidOCR (%s)",
+            paddle_error,
+        )
+        try:
+            from services.rapidocr_adapter import RapidOCRAdapter
+
+            return RapidOCRAdapter()
+        except Exception as rapid_error:
+            raise RuntimeError(
+                "No OCR engine could be initialized. Install PaddleOCR or RapidOCR."
+            ) from rapid_error
 
 
 def _confidence(value: Any) -> float:

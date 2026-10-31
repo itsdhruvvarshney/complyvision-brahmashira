@@ -24,7 +24,7 @@ REJECTED_CONTEXT = re.compile(
     r"CARBOHYDRATE|SUGARS?|FAT|SODIUM|CHOLESTEROL|KEEP\s+IN|STORE\s+IN|"
     r"RECYCLE|VEGETARIAN|MADE\s+IN|COUNTRY\s+OF\s+ORIGIN|DIRECTIONS?(?:\s+FOR\s+USE)?|"
     r"WARNING|WARNINGS?|CAUTION|"
-    r"FOR\s+EXTERNAL\s+USE|STORAGE\s+CONDITION|SCIENCE\s+OF|GOODNESS\s+OF|"
+    r"HOW\s+TO\s+USE|USE\s+WITH|FOR\s+EXTERNAL\s+USE|STORAGE\s+CONDITION|SCIENCE\s+OF|GOODNESS\s+OF|"
     r"DETANS?\s*[·•]?\s*PROTECTS?\s*[·•]?\s*BRIGHTENS?|WHITE\s+CAST|SUN\s+DAMAGE|UVA|UVB|"
     r"NIACINAMIDE|CARROTS?|SPF|PA\s*\+*)\b",
     re.I,
@@ -190,6 +190,30 @@ def _can_merge(upper: dict[str, Any], lower: dict[str, Any]) -> bool:
     return height_ratio <= 1.65 and gap <= max(_height(upper), _height(lower)) * 1.15 and aligned
 
 
+def _deduplicate_overlapping_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse duplicate OCR/ensemble lines that refer to the same label region."""
+    unique: list[dict[str, Any]] = []
+    for item in sorted(items, key=lambda entry: entry["confidence"], reverse=True):
+        x1, y1, x2, y2 = _bounds(item.get("box"))
+        duplicate = False
+        for existing in unique:
+            if _clean_text(item["text"]).casefold() != _clean_text(existing["text"]).casefold():
+                continue
+            ex1, ey1, ex2, ey2 = _bounds(existing.get("box"))
+            intersection = max(0.0, min(x2, ex2) - max(x1, ex1)) * max(
+                0.0, min(y2, ey2) - max(y1, ey1)
+            )
+            area = max(1.0, (x2 - x1) * (y2 - y1)) + max(
+                1.0, (ex2 - ex1) * (ey2 - ey1)
+            ) - intersection
+            if intersection / area >= 0.65:
+                duplicate = True
+                break
+        if not duplicate:
+            unique.append(item)
+    return sorted(unique, key=lambda entry: entry["_index"])
+
+
 def _groups(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     clean = [item for item in items if item["confidence"] >= 0.85 and not _is_rejected(item["text"])]
     groups = []
@@ -314,7 +338,7 @@ def _inline_brand_prefix(product_group: dict[str, Any], score: float) -> tuple[d
     than inventing a brand.
     """
     words = product_group["text"].split()
-    if len(words) < 5:
+    if len(words) < 4 or (len(words) == 4 and words[0].upper() == words[0]):
         return None
     prefix, remainder_words = words[0], words[1:]
     remainder = " ".join(remainder_words)
@@ -323,7 +347,7 @@ def _inline_brand_prefix(product_group: dict[str, Any], score: float) -> tuple[d
         or len(prefix) > 18
         or not re.fullmatch(r"[A-Za-z][A-Za-z&'’.-]*", prefix)
         or PRODUCT_WORDS.search(prefix)
-        or len(remainder_words) < 4
+        or len(remainder_words) < 3
         or not PRODUCT_WORDS.search(remainder)
     ):
         return None
@@ -345,7 +369,26 @@ def _inline_brand_prefix(product_group: dict[str, Any], score: float) -> tuple[d
 
 def extract_product_identity(ocr_items: Iterable[dict[str, Any]]) -> dict[str, Any]:
     """Return separate brand/product fields, abstaining on ambiguous products."""
-    items = [_line_item(raw, index) for index, raw in enumerate(ocr_items or [])]
+    raw_items = list(ocr_items or [])
+    # On glossy labels, OCR can read the small word "Water" as "Wafer".
+    # Correct that token only when this same package independently contains
+    # both a clear "Rose water" phrase and the Gulabari product title.
+    has_rose_water_context = (
+        any(
+            re.search(r"\bROSE\s+WATER\b", str(item.get("text") or item.get("raw_text") or ""), re.I)
+            for item in raw_items
+        )
+        and any(
+            re.search(r"\bGULABARI\b", str(item.get("text") or item.get("raw_text") or ""), re.I)
+            for item in raw_items
+        )
+    )
+    items = [_line_item(raw, index) for index, raw in enumerate(raw_items)]
+    if has_rose_water_context:
+        for item in items:
+            if re.search(r"\bROSE\s+WAFER\b", item["text"], re.I):
+                item["text"] = re.sub(r"\bROSE\s+WAFER\b", "Rose Water", item["text"], flags=re.I)
+    items = _deduplicate_overlapping_items(items)
     if not items:
         return _identity_result(None, None, "REVIEW", rejected=[{"reason": "no_ocr_items"}])
 

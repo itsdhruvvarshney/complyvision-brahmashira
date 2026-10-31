@@ -60,7 +60,7 @@ function ruleStatus(rules, present) {
   if (statuses.includes('FAIL')) return 'FAIL'
   if (statuses.includes('REVIEW')) return 'REVIEW'
   if (statuses.includes('PASS')) return 'PASS'
-  if (statuses.includes('NOT_APPLICABLE')) return 'REVIEW'
+  if (statuses.length && statuses.every((status) => status === 'NOT_APPLICABLE' || status === 'N/A')) return 'NOT_APPLICABLE'
   if (!present) return 'FAIL'
   return 'REVIEW'
 }

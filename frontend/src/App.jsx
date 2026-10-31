@@ -1,7 +1,7 @@
  
 import { useEffect, useState } from 'react'
 import { AppShell } from './components/AppShell'
-import { getLatestInspection } from './services/inspectionService'
+import { getInspectionById, getLatestInspection } from './services/inspectionService'
 import { HomePage } from './pages/HomePage'
 import { LoginPage } from './pages/LoginPage'
 import { DashboardPage } from './pages/DashboardPage'
@@ -13,7 +13,12 @@ function App() {
   const [inspection, setInspection] = useState(getLatestInspection)
   useEffect(() => { const update = () => setPage(window.location.hash.slice(2) || 'home'); addEventListener('hashchange', update); return () => removeEventListener('hashchange', update) }, [])
   const navigate = (next) => { window.location.hash = `/${next}`; setPage(next) }
-  const pages = { dashboard: <DashboardPage onNavigate={navigate} />, workspace: <WorkspacePage inspection={inspection} setInspection={setInspection} />, history: <HistoryPage />, insights: <InsightsPage inspection={inspection} />, rules: <RulesPage />, reports: <ReportsPage inspection={inspection} />, settings: <SettingsPage /> }
+  const openInspection = (id) => {
+    const saved = getInspectionById(id)
+    if (saved) setInspection(saved)
+    navigate('workspace')
+  }
+  const pages = { dashboard: <DashboardPage onNavigate={navigate} onOpenInspection={openInspection} />, workspace: <WorkspacePage inspection={inspection} setInspection={setInspection} />, history: <HistoryPage onOpenInspection={openInspection} />, insights: <InsightsPage inspection={inspection} />, rules: <RulesPage />, reports: <ReportsPage inspection={inspection} />, settings: <SettingsPage /> }
   if (page === 'login') return <LoginPage />
   if (page === 'home') return <HomePage />
   return <AppShell page={page} onNavigate={navigate}>{pages[page] || pages.dashboard}</AppShell>

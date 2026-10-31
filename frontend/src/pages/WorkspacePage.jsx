@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { downloadCsv, downloadJson, hashImageFile, inspectPackage, preparePackage, printReport } from '../services/inspectionService'
+import { checkAnalysisHealth, downloadCsv, downloadJson, downloadMarkdown, hashImageFile, inspectPackage, preparePackage, printReport, saveInspection } from '../services/inspectionService'
 import { calculateFieldConfidence, formatInspectionDate, summarizeFields } from '../services/workspaceModel'
 import { StatusBadge } from '../components/StatusBadge'
 
@@ -13,6 +13,8 @@ const qualityNames = {
   SKEWED: 'Label appears tilted', SKEW_ANGLE: 'Label appears tilted', LOW_CONTRAST: 'Low text contrast', LOW_TEXT_CONTRAST: 'Low text contrast',
 }
 const safeText = (value) => typeof value === 'string' ? value : value == null ? '' : String(value)
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const pipelineStages = ['Image quality', 'OCR', 'Declaration extraction', 'Rule evaluation', 'Report generation']
 
 export function WorkspacePage({ inspection, setInspection }) {
   const [selected, setSelected] = useState(null)
@@ -25,6 +27,9 @@ export function WorkspacePage({ inspection, setInspection }) {
   const [showAllBoxes, setShowAllBoxes] = useState(false)
   const [boxOpacity, setBoxOpacity] = useState(12)
   const [loading, setLoading] = useState(false)
+  const [pipelineStageIndex, setPipelineStageIndex] = useState(0)
+  const [healthStatus, setHealthStatus] = useState('checking')
+  const [saveError, setSaveError] = useState(inspection.historySaveError || '')
   const [error, setError] = useState('')
   const [selectedFile, setSelectedFile] = useState(null)
   const [filter, setFilter] = useState('all')
@@ -75,6 +80,22 @@ export function WorkspacePage({ inspection, setInspection }) {
   }, [inspection.id, inspection.fields])
   useEffect(() => { fitScale() }, [fitScale])
   useEffect(() => {
+    let active = true
+    const check = async () => {
+      try { await checkAnalysisHealth(); if (active) setHealthStatus('online') }
+      catch { if (active) setHealthStatus('offline') }
+    }
+    check()
+    const timer = window.setInterval(check, 30000)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [])
+  useEffect(() => {
+    if (!loading) return undefined
+    const timer = window.setInterval(() => setPipelineStageIndex((current) => Math.min(current + 1, pipelineStages.length - 1)), 1800)
+    return () => window.clearInterval(timer)
+  }, [loading])
+  useEffect(() => { setSaveError(inspection.historySaveError || '') }, [inspection.id, inspection.historySaveError])
+  useEffect(() => {
     const resize = () => fitScale()
     window.addEventListener('resize', resize)
     return () => window.removeEventListener('resize', resize)
@@ -110,8 +131,8 @@ export function WorkspacePage({ inspection, setInspection }) {
   const [helpOpen, setHelpOpen] = useState(false)
   const upload = async (file) => {
     if (!file) return
-    if (!/^image\/(jpeg|png|webp)$/.test(file.type)) { setError('Choose a JPG, PNG, or WEBP package image.'); return }
-    if (file.size > 20 * 1024 * 1024) { setError('The image must be 20 MB or smaller.'); return }
+    if (!/^image\/(jpeg|png)$/.test(file.type)) { setSelectedFile(null); setError('Choose a JPEG or PNG package image.'); return }
+    if (file.size > MAX_IMAGE_BYTES) { setSelectedFile(null); setError('The image must be 10 MiB or smaller.'); return }
     if (inspection.image?.startsWith('blob:')) URL.revokeObjectURL(inspection.image)
     setError(''); setSelectedFile(file); setSelected(null); setDimensions({ width: 0, height: 0 }); setPan({ x: 0, y: 0 })
     const prepared = preparePackage(file)
@@ -121,13 +142,18 @@ export function WorkspacePage({ inspection, setInspection }) {
   const runEvaluation = async () => {
     if (!selectedFile) return
     const controller = new AbortController(); cancelRef.current = controller
-    setError(''); setLoading(true)
+    setError(''); setSaveError(''); setPipelineStageIndex(0); setLoading(true)
     try {
       const result = await inspectPackage(selectedFile, inspection.image, { signal: controller.signal })
-      setInspection(result); setSelected(result.fields.find((item) => item.present)?.id || null)
+      setPipelineStageIndex(pipelineStages.length); setInspection(result); setSaveError(result.historySaveError || ''); setSelected(result.fields.find((item) => item.present)?.id || null)
     } catch (evaluationError) {
-      if (evaluationError.name !== 'AbortError') setError(evaluationError.message || 'Evaluation failed. Try again with a clearer package image.')
+      if (evaluationError.name !== 'AbortError') setError(evaluationError.message === 'Failed to fetch' ? 'Could not reach the analysis service. Check that it is available, then retry evaluation.' : evaluationError.message || 'Evaluation failed. Try again with a clearer package image.')
     } finally { setLoading(false); cancelRef.current = null }
+  }
+  const persistCurrentInspection = (next) => {
+    setInspection(next)
+    const result = saveInspection(next)
+    setSaveError(result.ok ? '' : result.error)
   }
   const selectField = (id) => {
     setSelected(id); setInspectorOpen(true)
@@ -139,9 +165,9 @@ export function WorkspacePage({ inspection, setInspection }) {
     const entry = { fieldId: field.id, previousValue: field.value, value: editValue, at: new Date().toISOString(), user: 'You' }
     const next = { ...inspection, fields: nextFields, corrections: [...(inspection.corrections || []), entry] }
     const nextHistory = historyIndex < 0 ? [inspection, next] : [...history.slice(0, historyIndex + 1), next]
-    setHistory(nextHistory); setHistoryIndex(nextHistory.length - 1); setInspection(next); setEditing(false)
+    setHistory(nextHistory); setHistoryIndex(nextHistory.length - 1); persistCurrentInspection(next); setEditing(false)
   }
-  const updateStatus = (id, status, reason) => setInspection({ ...inspection, fields: fields.map((item) => item.id === id ? { ...item, status, reason } : item) })
+  const updateStatus = (id, status, reason) => persistCurrentInspection({ ...inspection, fields: fields.map((item) => item.id === id ? { ...item, status, reason } : item) })
   const pointerStart = (event) => { if (spaceDown || event.button === 1) { event.preventDefault(); pointer.current = { startX: event.clientX, startY: event.clientY, panX: pan.x, panY: pan.y }; setDragging(true); event.currentTarget.setPointerCapture(event.pointerId) } }
   const pointerMove = (event) => { if (dragging && pointer.current) setPan({ x: pointer.current.panX + event.clientX - pointer.current.startX, y: pointer.current.panY + event.clientY - pointer.current.startY }) }
   const undo = () => { if (historyIndex <= 0) return; setInspection(history[historyIndex - 1]); setHistoryIndex((index) => index - 1) }
@@ -156,22 +182,24 @@ export function WorkspacePage({ inspection, setInspection }) {
       </div>
       <div className="workspace-actions">
         <button className="secondary-button" onClick={() => input.current?.click()} disabled={loading}>Upload image</button>
-        <input ref={input} onChange={(event) => { upload(event.target.files?.[0]); event.target.value = '' }} type="file" accept="image/jpeg,image/png,image/webp" hidden />
+        <input ref={input} onChange={(event) => { upload(event.target.files?.[0]); event.target.value = '' }} type="file" accept="image/jpeg,image/png" hidden />
         <button className="primary-button" onClick={runEvaluation} disabled={!selectedFile || loading}>{loading ? 'Evaluating…' : 'Run evaluation'}</button>
         {loading && <button className="secondary-button" onClick={() => cancelRef.current?.abort()}>Cancel</button>}
-        <label className="export-menu"><span className="visually-hidden">Export format</span><select aria-label="Export format" disabled={!inspection.evaluated} defaultValue="json" onChange={(event) => { const choice = event.target.value; if (choice === 'json') downloadJson(inspection); if (choice === 'csv') downloadCsv(inspection); if (choice === 'pdf') printReport(inspection); event.target.value = 'json' }}><option value="json">Export JSON</option><option value="csv">Export CSV</option><option value="pdf">Print PDF report</option></select></label>
+        <label className="export-menu"><span className="visually-hidden">Export format</span><select aria-label="Export format" disabled={!inspection.evaluated} defaultValue="json" onChange={(event) => { const choice = event.target.value; if (choice === 'json') downloadJson(inspection); if (choice === 'csv') downloadCsv(inspection); if (choice === 'markdown') downloadMarkdown(inspection); if (choice === 'pdf') printReport(inspection); event.target.value = 'json' }}><option value="json">Export JSON</option><option value="csv">Export CSV</option><option value="markdown">Export Markdown</option><option value="pdf">Print PDF report</option></select></label>
         <button className="icon-help" aria-label="Keyboard shortcuts" aria-expanded={helpOpen} onClick={() => setHelpOpen((value) => !value)}>?</button>
       </div>
     </header>
     {helpOpen && <div className="shortcuts-popover" role="dialog" aria-label="Keyboard shortcuts"><b>Keyboard shortcuts</b><span>↑ / ↓ Select declaration</span><span>Enter Open selection</span><span>Esc Clear selection</span><span>+ / − Zoom · 0 Fit</span><span>F Front / back · B Boxes</span><span>Space + drag Pan</span></div>}
     {error && <div className="notice error" role="alert"><span>{error}</span><button onClick={runEvaluation} disabled={!selectedFile || loading}>Retry</button></div>}
-    {loading && <div className="evaluation-progress" role="status"><span className="progress-spinner" /> Running OCR and compliance rules…</div>}
-    {!inspection.evaluated && !inspection.image && !selectedFile && <div className="upload-empty" onClick={() => input.current?.click()}><strong>Drop a package image here or choose a file</strong><span>JPG, PNG, or WEBP · Up to 20 MB</span><button className="secondary-button">Choose image</button></div>}
+    {healthStatus === 'offline' && <div className="notice error" role="status"><span>Analysis service is unavailable. Start or reconnect the service, then retry.</span><button className="secondary-button" onClick={() => checkAnalysisHealth().then(() => setHealthStatus('online')).catch(() => setHealthStatus('offline'))}>Check again</button></div>}
+    {loading && <div className="evaluation-progress pipeline-progress" role="status" aria-live="polite"><span className="progress-spinner" /> <div><strong>Evaluation in progress</strong><small className="pipeline-note">Stage indicator is estimated; the analysis API returns its report when processing completes.</small><ol>{pipelineStages.map((stageName, index) => <li key={stageName} className={index < pipelineStageIndex ? 'complete' : index === pipelineStageIndex ? 'active' : ''}>{stageName}</li>)}</ol></div></div>}
+    {saveError && <div className="notice error" role="alert"><span>{saveError}</span><button className="secondary-button" onClick={() => { const result = saveInspection(inspection); setSaveError(result.ok ? '' : result.error) }}>Retry save</button></div>}
+    {!inspection.evaluated && !inspection.image && !selectedFile && <div className="upload-empty" onClick={() => input.current?.click()}><strong>Drop a package image here or choose a file</strong><span>JPEG or PNG · Up to 10 MiB</span><button className="secondary-button">Choose image</button></div>}
     <div className="inspection-layout redesigned-layout">
       <nav className="tool-rail" aria-label="Annotation tools"><div role="toolbar" aria-label="Image annotation tools">{tools.map((item) => <button key={item.id} className={tool === item.id ? 'active' : ''} aria-label={item.label} aria-pressed={tool === item.id} title={item.label} onClick={() => setTool(item.id)}><span>{item.icon}</span></button>)}</div><div className="history-controls"><button className="undo-control" title="Undo correction" aria-label="Undo correction" onClick={undo} disabled={historyIndex <= 0}>↶</button><button className="undo-control" title="Redo correction" aria-label="Redo correction" onClick={redo} disabled={historyIndex + 1 >= history.length}>↷</button></div></nav>
       <section className="canvas-panel redesigned-canvas" aria-label="Package image viewer">
         <div className="canvas-header redesigned-canvas-header"><div><strong>Package image</strong><span className={`quality-chip ${qualityProblems.length ? 'warning' : ''}`}>{inspection.evaluated ? qualityProblems.length ? `Review · ${qualityProblems.length} quality checks` : 'Quality checks clear' : inspection.image ? 'Checks pending' : 'Awaiting image'}</span></div>
-          <details className="quality-popover"><summary aria-label="Image quality details">ⓘ Quality</summary><div><strong>Image quality checks</strong>{inspection.evaluated ? <><p>Resolution: {imageMetadata.width || quality.width || '—'} × {imageMetadata.height || quality.height || '—'}</p><p>Blur variance: {quality.blur_score ?? 'Not reported'}</p><p>Brightness: {quality.brightness ?? 'Not reported'}</p><p>Glare ratio: {quality.glare_ratio == null ? 'Not reported' : `${Math.round(quality.glare_ratio * 100)}%`}</p><p>Skew angle: {quality.skew_angle_degrees == null ? 'Not reported' : `${quality.skew_angle_degrees}°`}</p><p>Text contrast: {quality.text_contrast ?? 'Not reported'}</p>{qualityProblems.length ? qualityProblems.map((code) => <p className="quality-warning" key={code}>⚠ {qualityNames[code] || String(code).replaceAll('_', ' ').toLowerCase()}</p>) : <p>Image quality checks did not report issues.</p>}{inspection.report?.calibration?.detected ? <p>Scale reference marker detected (ArUco ID {inspection.report.calibration.marker_id ?? '—'}).</p> : <p>Scale reference marker not detected; size and perspective measurements may be unavailable.</p>}</> : <p>Run an evaluation to inspect blur, brightness, glare and resolution.</p>}</div></details>
+          <details className="quality-popover"><summary aria-label="Image quality details">ⓘ Quality</summary><div><strong>Image quality checks</strong>{inspection.evaluated ? <><p>Resolution: {imageMetadata.width || quality.width || '—'} × {imageMetadata.height || quality.height || '—'}</p><p>Blur variance: {quality.blur_score ?? 'Not reported'}</p><p>Brightness: {quality.brightness ?? 'Not reported'}</p><p>Glare ratio: {quality.glare_ratio == null ? 'Not reported' : `${Math.round(quality.glare_ratio * 100)}%`}</p><p>Skew angle: {quality.skew_angle_degrees == null ? 'Not reported' : `${quality.skew_angle_degrees}°`}</p><p>Text contrast: {quality.text_contrast ?? 'Not reported'}</p>{qualityProblems.length ? qualityProblems.map((code) => <p className="quality-warning" key={code}>⚠ {qualityNames[code] || String(code).replaceAll('_', ' ').toLowerCase()}</p>) : <p>Image quality checks did not report issues.</p>}{inspection.report?.evidence?.calibration?.detected ? <p>Scale reference marker detected (ArUco ID {inspection.report.evidence.calibration.marker_id ?? '—'}).</p> : <p>Scale reference marker not detected; size and perspective measurements may be unavailable.</p>}</> : <p>Run an evaluation to inspect blur, brightness, glare and resolution.</p>}</div></details>
         </div>
         <div ref={viewport} className={`canvas-viewport ${dragging ? 'is-dragging' : ''}`} onPointerDown={pointerStart} onPointerMove={pointerMove} onPointerUp={() => { setDragging(false); pointer.current = null }} onPointerCancel={() => setDragging(false)}>
           {inspection.image ? <div ref={stage} className="image-stage" style={{ width: dimensions.width ? `${dimensions.width}px` : 'auto', height: dimensions.height ? `${dimensions.height}px` : 'auto', transform: `translate(-50%, -50%) translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>

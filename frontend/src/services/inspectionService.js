@@ -1,7 +1,12 @@
-import { activity, demoInspection } from '../data/demoData'
 import { buildDeclarationFields, calculateFieldConfidence, csvForInspection } from './workspaceModel'
 
 const KEY = 'complyvision-inspections'
+const displayValue = (value) => {
+  if (value == null || value === '') return ''
+  if (Array.isArray(value)) return value.map(displayValue).filter(Boolean).join(', ')
+  if (typeof value === 'object') return Object.entries(value).filter(([, item]) => item != null && item !== '').map(([key, item]) => `${key.replaceAll('_', ' ')}: ${displayValue(item)}`).join(' · ')
+  return String(value)
+}
 export const emptyInspection = {
   id: 'No evaluation yet',
   product: 'No package selected',
@@ -122,40 +127,50 @@ const statusForRules = (rules) => {
 
 export const getInspections = () => {
   try {
-    return JSON.parse(localStorage.getItem(KEY) || 'null') || [
-      demoInspection,
-      ...activity.slice(1).map((item) => ({ ...demoInspection, ...item, createdAt: item.time })),
-    ]
+    const items = JSON.parse(localStorage.getItem(KEY) || '[]')
+    return Array.isArray(items) ? items.filter((item) => item && item.id && item.report).sort((a, b) => new Date(b.timestamp || b.createdAt || 0) - new Date(a.timestamp || a.createdAt || 0)) : []
   } catch {
-    return [demoInspection]
+    return []
   }
 }
 
+const hydrateInspection = (latest) => {
+  if (!latest) return null
+  const timestamp = parseLegacyInspectionDate(latest.timestamp || latest.createdAt)
+  const fields = Array.isArray(latest.fields) && latest.fields.length
+    ? latest.fields
+    : latest.report?.extracted_fields ? buildDeclarationFields(latest.report.extracted_fields, latest.report) : []
+  const readableFields = fields.map((field) => ({
+    ...field,
+    label: displayValue(field.label),
+    value: displayValue(field.value) || 'Not detected',
+    rawText: displayValue(field.rawText),
+    reason: displayValue(field.reason),
+    ruleId: displayValue(field.ruleId),
+    ruleReference: displayValue(field.ruleReference),
+    ruleDescription: displayValue(field.ruleDescription),
+  }))
+  const confidence = calculateFieldConfidence(readableFields)
+  return {
+    ...latest,
+    fields: readableFields,
+    image: null,
+    createdAt: timestamp,
+    timestamp,
+    product: displayValue(readableFields.find((field) => field.id === 'product_name' && field.present)?.value || latest.product) || 'Package inspection',
+    brand: displayValue(readableFields.find((field) => field.id === 'brand_name' && field.present)?.value || latest.brand),
+    confidence: confidence.value || latest.confidence || 0,
+    confidenceCapped: confidence.capped,
+    confidenceDefinition: confidence.explanation,
+    evaluated: true,
+  }
+}
+
+export const getInspectionById = (id) => hydrateInspection(getInspections().find((item) => item.id === id))
+
 export const getLatestInspection = () => {
   try {
-    const saved = JSON.parse(localStorage.getItem(KEY) || '[]')
-    const latest = saved.find((item) => item.evaluated && item.report)
-    if (!latest) return emptyInspection
-    const timestamp = parseLegacyInspectionDate(latest.createdAt)
-    if (latest.report?.extracted_fields) {
-      const fields = buildDeclarationFields(latest.report.extracted_fields, latest.report)
-      const confidence = calculateFieldConfidence(fields)
-      const product = fields.find((field) => field.id === 'product_name' && field.present)?.value || latest.product
-      const brand = fields.find((field) => field.id === 'brand_name' && field.present)?.value || latest.brand
-      return { ...latest, fields, product, brand, createdAt: timestamp, timestamp, confidence: confidence.value, confidenceCapped: confidence.capped, confidenceDefinition: confidence.explanation }
-    }
-    return {
-      ...latest,
-      createdAt: timestamp,
-      timestamp,
-      fields: (latest.fields || []).map((field) => {
-        const present = field.present ?? field.value !== 'Not detected'
-        const status = field.id === 'brand_name' && !present && field.status === 'PASS'
-          ? 'REVIEW'
-          : field.status
-        return { ...field, present, status }
-      }),
-    }
+    return hydrateInspection(getInspections().find((item) => item.evaluated && item.report)) || emptyInspection
   } catch {
     return emptyInspection
   }
@@ -179,11 +194,32 @@ export const saveInspection = (inspection) => {
     const report = inspection.report
       ? { ...inspection.report, evidence_images: [] }
       : undefined
-    const saved = { ...inspection, report, image: null }
-    localStorage.setItem(KEY, JSON.stringify([saved, ...getInspections().filter((item) => item.id !== inspection.id)]))
-  } catch {
-    // Keep the current evaluation visible if the browser's local storage is full.
+    const persisted = { ...inspection }
+    delete persisted.historySaveError
+    const saved = { ...persisted, report, image: null }
+    const next = [saved, ...getInspections().filter((item) => item.id !== inspection.id)]
+    localStorage.setItem(KEY, JSON.stringify(next))
+    window.dispatchEvent(new CustomEvent('complyvision:history-updated'))
+    return { ok: true }
+  } catch (error) {
+    const message = error?.name === 'QuotaExceededError'
+      ? 'Browser storage is full. Remove older inspection history or free browser storage, then retry saving.'
+      : `Could not save inspection history: ${error?.message || 'browser storage is unavailable'}`
+    return { ok: false, error: message }
   }
+}
+
+export async function checkAnalysisHealth({ signal } = {}) {
+  const response = await fetch('/health', { signal, cache: 'no-store' })
+  if (!response.ok) throw new Error(`Analysis service health check failed (${response.status})`)
+  return response.json()
+}
+
+export async function fetchRuleCatalog({ signal } = {}) {
+  const response = await fetch('/rules', { signal, cache: 'no-store' })
+  const result = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(result.detail || `Rule catalog request failed (${response.status})`)
+  return result.rules || []
 }
 
 export function preparePackage(file) {
@@ -206,8 +242,12 @@ export function preparePackage(file) {
 
 export async function hashImageFile(file) {
   if (!globalThis.crypto?.subtle) return ''
-  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer())
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  try {
+    const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer())
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  } catch {
+    return ''
+  }
 }
 
 export async function inspectPackage(file, previewUrl, { signal } = {}) {
@@ -249,7 +289,8 @@ export async function inspectPackage(file, previewUrl, { signal } = {}) {
     quality: result.quality || null,
     ocrText,
   }
-  saveInspection(inspection)
+  const saved = saveInspection(inspection)
+  if (!saved.ok) inspection.historySaveError = saved.error
   return inspection
 }
 
@@ -276,11 +317,87 @@ export function downloadCsv(inspection) {
   link.click(); URL.revokeObjectURL(link.href)
 }
 
+export function markdownForInspection(inspection) {
+  const report = inspection.report || {}
+  const summary = report.summary || {}
+  const quality = report.quality || {}
+  const measurements = report.evidence || {}
+  const rules = report.rule_results || []
+  const fields = inspection.fields || []
+  const lines = [
+    `# Compliance inspection — ${inspection.product || inspection.id}`,
+    '',
+    `- **Inspection:** ${inspection.id}`,
+    `- **Date:** ${inspection.timestamp || inspection.createdAt || 'Unknown'}`,
+    `- **Overall status:** ${summary.overall_status || inspection.status || 'REVIEW'}`,
+    `- **Image:** ${report.image?.filename || 'Not retained'}`,
+    '',
+    `> ${report.disclaimer || 'Prototype decision-support report. Review all extracted values and rules.'}`,
+    '',
+    '## Result summary',
+    '',
+    `| PASS | FAIL | REVIEW | N/A |`,
+    `| ---: | ---: | ---: | ---: |`,
+    `| ${summary.pass_count ?? '—'} | ${summary.fail_count ?? '—'} | ${summary.review_count ?? '—'} | ${summary.not_applicable_count ?? '—'} |`,
+    '',
+    '## Extracted declarations',
+    '',
+    '| Declaration | Value | Status | Confidence | Evidence |',
+    '| --- | --- | --- | ---: | --- |',
+    ...fields.map((field) => `| ${mdCell(field.label)} | ${mdCell(field.value)} | ${field.status} | ${field.confidence}% | ${mdCell(field.rawText || '—')} |`),
+    '',
+    '## Rule results',
+    '',
+    '| Rule | Status | Explanation | Legal source |',
+    '| --- | --- | --- | --- |',
+    ...rules.map((rule) => `| ${mdCell(rule.rule_id || rule.field_name)} | ${rule.status} | ${mdCell(rule.reason || rule.description || '—')} | ${mdCell(rule.legal_source || '—')} |`),
+    '',
+    '## Image quality',
+    '',
+    `- Usable: ${quality.usable == null ? 'Not reported' : quality.usable ? 'Yes' : 'No'}`,
+    `- Resolution: ${report.image?.width || '—'} × ${report.image?.height || '—'}`,
+    `- Blur score: ${quality.blur_score ?? 'Not reported'}`,
+    `- Brightness: ${quality.brightness ?? 'Not reported'}`,
+    `- Glare ratio: ${quality.glare_ratio ?? 'Not reported'}`,
+    `- Skew angle: ${quality.skew_angle_degrees == null ? 'Not reported' : `${quality.skew_angle_degrees}°`}`,
+    `- Text contrast: ${quality.text_contrast ?? 'Not reported'}`,
+    `- Issues: ${(quality.issues || []).join(', ') || 'None reported'}`,
+    '',
+    '## Numeral height and contrast',
+    '',
+    `- Numeral height: ${measurements.numeral_height?.estimated_numeral_height_mm == null ? 'Not measured' : `${measurements.numeral_height.estimated_numeral_height_mm} mm`}`,
+    `- Measurement status: ${measurements.numeral_height?.measurement_status || 'Not reported'}`,
+    `- Measurement confidence: ${measurements.numeral_height?.measurement_confidence == null ? 'Not reported' : `${Math.round(measurements.numeral_height.measurement_confidence * 100)}%`}`,
+    `- Contrast targets: ${Object.entries(measurements.contrast?.targets || {}).map(([name, value]) => `${name}: ${value.contrast_ratio ?? 'n/a'} ratio (${value.status || 'unrated'})`).join('; ') || 'Not measured'}`,
+    '',
+    '## OCR evidence',
+    '',
+    ...(report.ocr?.evidence || []).map((item) => `- ${mdCell(item.raw_text || item.normalized_text || 'Text')} — ${item.confidence == null ? 'confidence unavailable' : `${Math.round(item.confidence * 100)}% confidence`}`),
+    '',
+    '---',
+    'Generated by ComplyVision. Prototype decision support only; not an official compliance certificate.',
+  ]
+  return lines.join('\n')
+}
+
+const mdCell = (value) => String(value ?? '').replaceAll('|', '\\|').replaceAll('\n', '<br>').trim()
+
+export function downloadMarkdown(inspection) {
+  const blob = new Blob([markdownForInspection(inspection)], { type: 'text/markdown;charset=utf-8' })
+  const link = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `${inspection.id}.md` })
+  link.click(); URL.revokeObjectURL(link.href)
+}
+
 export function printReport(inspection) {
-  const rows = (inspection.fields || []).map((field) => `<tr><td>${escapeHtml(field.label)}</td><td>${escapeHtml(field.value)}</td><td>${escapeHtml(field.status)}</td><td>${field.confidence}%</td></tr>`).join('')
-  const popup = window.open('', '_blank', 'noopener,noreferrer,width=900,height=700')
+  const report = inspection.report || {}
+  const rows = (inspection.fields || []).map((field) => `<tr><td>${escapeHtml(field.label)}</td><td>${escapeHtml(field.value)}</td><td>${escapeHtml(field.status)}</td><td>${field.confidence}%</td><td>${escapeHtml(field.rawText || '—')}</td></tr>`).join('')
+  const ruleRows = (report.rule_results || []).map((rule) => `<tr><td>${escapeHtml(rule.rule_id || rule.field_name)}</td><td>${escapeHtml(rule.status)}</td><td>${escapeHtml(rule.reason || rule.description)}</td><td>${escapeHtml(rule.legal_source || '—')}</td></tr>`).join('')
+  const quality = report.quality || {}
+  const measurement = report.evidence?.numeral_height || {}
+  const contrast = Object.entries(report.evidence?.contrast?.targets || {}).map(([name, item]) => `<li>${escapeHtml(name)}: contrast ratio ${escapeHtml(item.contrast_ratio ?? 'not measured')}; ${escapeHtml(item.status || 'unrated')}</li>`).join('')
+  const popup = window.open('', '_blank', 'width=900,height=700')
   if (!popup) return false
-  popup.document.write(`<title>${escapeHtml(inspection.id)} report</title><h1>${escapeHtml(inspection.product)}</h1><p>${escapeHtml(inspection.id)} · ${escapeHtml(inspection.createdAt)}</p><table><thead><tr><th>Declaration</th><th>Value</th><th>Status</th><th>Confidence</th></tr></thead><tbody>${rows}</tbody></table><style>body{font:14px system-ui;padding:32px;color:#12213c}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:10px;border:1px solid #d9e0ec}</style>`)
+  popup.document.write(`<title>${escapeHtml(inspection.id)} report</title><h1>${escapeHtml(inspection.product)}</h1><p>${escapeHtml(inspection.id)} · ${escapeHtml(inspection.timestamp || inspection.createdAt)} · ${escapeHtml(report.summary?.overall_status || inspection.status)}</p><p>${escapeHtml(report.disclaimer || 'Prototype decision-support report; not an official compliance certificate.')}</p><h2>Extracted declarations</h2><table><thead><tr><th>Declaration</th><th>Value</th><th>Status</th><th>Confidence</th><th>OCR evidence</th></tr></thead><tbody>${rows}</tbody></table><h2>Rule results</h2><table><thead><tr><th>Rule</th><th>Status</th><th>Explanation</th><th>Legal source</th></tr></thead><tbody>${ruleRows}</tbody></table><h2>Image quality</h2><p>Usable: ${escapeHtml(quality.usable == null ? 'Not reported' : quality.usable ? 'Yes' : 'No')} · Resolution: ${escapeHtml(report.image?.width || '—')} × ${escapeHtml(report.image?.height || '—')} · Blur: ${escapeHtml(quality.blur_score ?? '—')} · Brightness: ${escapeHtml(quality.brightness ?? '—')} · Glare: ${escapeHtml(quality.glare_ratio ?? '—')} · Skew: ${escapeHtml(quality.skew_angle_degrees ?? '—')} · Text contrast: ${escapeHtml(quality.text_contrast ?? '—')}</p><h2>Numeral height and contrast</h2><p>Numeral height: ${escapeHtml(measurement.estimated_numeral_height_mm ?? 'Not measured')} mm · Status: ${escapeHtml(measurement.measurement_status || 'Not reported')} · Confidence: ${escapeHtml(measurement.measurement_confidence ?? '—')}</p><ul>${contrast}</ul><style>body{font:14px/1.5 system-ui;padding:32px;color:#12213c}table{width:100%;border-collapse:collapse;margin:12px 0 28px}td,th{text-align:left;vertical-align:top;padding:8px;border:1px solid #d9e0ec;overflow-wrap:anywhere}h2{margin-top:30px}</style>`)
   popup.document.close(); popup.focus(); popup.print()
   return true
 }

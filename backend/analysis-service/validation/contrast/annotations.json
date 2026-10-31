@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "label_meanings": {
+    "CLEAR_CONTRAST": "Declaration numerals are easily distinguishable from the local background.",
+    "LOW_CONTRAST": "Declaration numerals and local background are visibly similar and readability is clearly poor.",
+    "UNCERTAIN": "Image conditions or localization prevent a reliable human classification."
+  },
+  "coverage_categories": [
+    "black_text_on_light",
+    "white_text_on_dark",
+    "colored_text_on_contrasting_background",
+    "gray_on_gray_low_contrast",
+    "glossy_packaging",
+    "glare_or_reflection",
+    "gradient_background",
+    "textured_background",
+    "curved_bottle",
+    "photographed_at_angle",
+    "small_mrp_print",
+    "large_net_quantity_print",
+    "cluttered_nearby_text",
+    "partial_shadow",
+    "different_packaging_colors"
+  ],
+  "annotations": []
+}

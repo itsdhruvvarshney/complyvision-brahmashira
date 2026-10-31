@@ -6,6 +6,7 @@ import logging
 import os
 import tempfile
 import time
+import csv
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -22,6 +23,7 @@ LOGGER = logging.getLogger("uvicorn.error")
 SERVICE_NAME = "SIH26034 Legal Metrology AI"
 DEFAULT_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 CHUNK_SIZE = 1024 * 1024
+RULE_MATRIX_FILE = Path(__file__).resolve().parents[1] / "data" / "rules-matrix.csv"
 SUPPORTED_UPLOADS = {
     "image/jpeg": {"extensions": {".jpg", ".jpeg"}, "temporary_suffix": ".jpg"},
     "image/png": {"extensions": {".png"}, "temporary_suffix": ".png"},
@@ -91,6 +93,25 @@ def create_app(analyzer: PackageAnalyzer | None = None) -> FastAPI:
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
         return HealthResponse(status="ok", service=SERVICE_NAME)
+
+    @app.get("/rules", response_model=dict[str, Any])
+    async def rule_catalog() -> dict[str, Any]:
+        try:
+            with RULE_MATRIX_FILE.open("r", encoding="utf-8-sig", newline="") as source:
+                rows = list(csv.DictReader(source))
+        except OSError:
+            LOGGER.exception("Could not read the bundled rules matrix")
+            raise HTTPException(status_code=503, detail="The rule catalog is unavailable") from None
+        rules = []
+        for row in rows:
+            rules.append({
+                **row,
+                "prototype_supported": str(row.get("prototype_supported", "")).lower() == "true",
+                "imported_only": str(row.get("imported_only", "")).lower() == "true",
+                "visual_check_required": str(row.get("visual_check_required", "")).lower() == "true",
+                "ocr_check_required": str(row.get("ocr_check_required", "")).lower() == "true",
+            })
+        return {"rules": rules, "source": "bundled rules-matrix.csv"}
 
     @app.post("/analyze", response_model=dict[str, Any])
     async def analyze(
