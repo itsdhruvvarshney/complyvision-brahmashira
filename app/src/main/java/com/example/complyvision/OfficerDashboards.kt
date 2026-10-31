@@ -29,11 +29,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
-import java.time.LocalDate
-import java.time.format.DateTimeFormatter
-import java.util.Locale
 
 private sealed interface DashState<out T> {
     data object Loading : DashState<Nothing>
@@ -42,10 +40,9 @@ private sealed interface DashState<out T> {
 }
 
 private val InspectorHeader = listOf(Color(0xFF1D5FE0), Color(0xFF3B8BFF))
-private val AuthorityHeader = listOf(Color(0xFF0B2E59), Color(0xFF1B6B5A))
 
 // ============================================================================
-// Inspector dashboard
+// Inspector dashboard (the Supreme Authority has its own shell in AuthorityShell.kt)
 // ============================================================================
 
 @Composable
@@ -53,125 +50,91 @@ fun InspectorDashboardScreen(session: OfficerSession, onLogout: () -> Unit) {
     var reloadKey by remember { mutableIntStateOf(0) }
     var state by remember { mutableStateOf<DashState<InspectorDashboardData>>(DashState.Loading) }
     var filter by rememberSaveable { mutableStateOf("All") }
+    var openCode by rememberSaveable { mutableStateOf<String?>(null) }
+    var toast by remember { mutableStateOf<Toast?>(null) }
 
     LaunchedEffect(session.token, reloadKey) {
-        state = DashState.Loading
-        state = try {
-            DashState.Ready(DashboardRepository.inspector(session.token))
+        if (state !is DashState.Ready) state = DashState.Loading
+        try {
+            state = DashState.Ready(DashboardRepository.inspector(session.token))
         } catch (e: SessionExpiredException) {
             onLogout()
-            return@LaunchedEffect
         } catch (e: ApiException) {
-            DashState.Failed(e.userMessage())
+            if (state !is DashState.Ready) state = DashState.Failed(e.userMessage())
         }
     }
 
-    DashboardFrame(
-        session = session,
-        headerColors = InspectorHeader,
-        title = "Inspector Dashboard",
-        onRefresh = { reloadKey++ },
-        onLogout = onLogout
-    ) {
-        when (val s = state) {
-            DashState.Loading -> LoadingBlock()
-            is DashState.Failed -> ErrorBlock(s.message) { reloadKey++ }
-            is DashState.Ready -> {
-                val d = s.data
-                StatGrid(
-                    listOf(
-                        StatItem("Assigned", d.assigned, Color(0xFF1D5FE0), Color(0xFFE3EEFF)),
-                        StatItem("In Progress", d.inProgress, Color(0xFFB7791F), Color(0xFFFFF1D6)),
-                        StatItem("Completed", d.completed, Color(0xFF1E8E4E), Color(0xFFDDF5E7)),
-                        StatItem("Violations", d.violations, Color(0xFFC53030), Color(0xFFFDE4E4))
+    val code = openCode
+    if (code != null) {
+        BackHandler { openCode = null }
+        androidx.compose.material3.ProvideTextStyle(androidx.compose.ui.text.TextStyle(letterSpacing = 0.sp, lineHeight = 1.25.em)) {
+        Box(Modifier.fillMaxSize().background(portalPageBrush())) {
+            CaseDetailPage(
+                token = session.token,
+                code = code,
+                role = OfficerRole.METROLOGY_INSPECTOR,
+                inspectors = emptyList(),
+                bottomSpace = 24.dp,
+                mutate = { it() },
+                onToast = { message, isError -> toast = Toast(System.nanoTime(), message, isError) },
+                onBack = { openCode = null },
+                onChanged = { reloadKey++ },
+                onSessionExpired = onLogout
+            )
+            ToastBanner(
+                toast = toast,
+                onDismiss = { toast = null },
+                modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 8.dp)
+            )
+        }
+        }
+    } else {
+        DashboardFrame(
+            session = session,
+            headerColors = InspectorHeader,
+            title = "Inspector Dashboard",
+            onRefresh = { reloadKey++ },
+            onLogout = onLogout
+        ) {
+            when (val s = state) {
+                DashState.Loading -> LoadingBlock()
+                is DashState.Failed -> ErrorBlock(s.message) { reloadKey++ }
+                is DashState.Ready -> {
+                    val d = s.data
+                    StatGrid(
+                        listOf(
+                            StatItem("Assigned", d.assigned, Color(0xFF1D5FE0), Color(0xFFE3EEFF)),
+                            StatItem("In Progress", d.inProgress, Color(0xFF0E9AA7), Color(0xFFD9F4F6)),
+                            StatItem("In Review", d.inReview, Color(0xFFB7791F), Color(0xFFFFF1D6)),
+                            StatItem("Completed", d.completed, Color(0xFF1E8E4E), Color(0xFFDDF5E7)),
+                            StatItem("Violations Found", d.violations, Color(0xFFC53030), Color(0xFFFDE4E4)),
+                            StatItem("Total Cases", d.inspections.size, Color(0xFF5B3FC4), Color(0xFFEBE5FF))
+                        )
                     )
-                )
 
-                SectionTitle("My Inspections")
+                    SectionTitle("My Inspections")
 
-                val statuses = listOf("All", "Scheduled", "In Progress", "Completed", "Violation Found")
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    statuses.forEach { label ->
-                        FilterChipPill(label = label, selected = filter == label) { filter = label }
+                    val statuses = listOf("All", CaseStatus.ASSIGNED, CaseStatus.SCHEDULED, CaseStatus.IN_PROGRESS, CaseStatus.UNDER_REVIEW, CaseStatus.PASSED, CaseStatus.FAILED)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        statuses.forEach { label ->
+                            FilterChipPill(label = label, selected = filter == label) { filter = label }
+                        }
                     }
-                }
 
-                val shown = d.inspections.filter { filter == "All" || it.status == filter }
-                if (shown.isEmpty()) {
-                    EmptyBlock(
-                        if (d.inspections.isEmpty()) "No inspections have been assigned to you yet."
-                        else "No inspections with status \"$filter\"."
-                    )
-                } else {
-                    shown.forEach { InspectionCard(it, showInspector = false) }
-                }
-            }
-        }
-    }
-}
-
-// ============================================================================
-// Supreme Authority dashboard
-// ============================================================================
-
-@Composable
-fun AuthorityDashboardScreen(session: OfficerSession, onLogout: () -> Unit) {
-    var reloadKey by remember { mutableIntStateOf(0) }
-    var state by remember { mutableStateOf<DashState<AuthorityDashboardData>>(DashState.Loading) }
-
-    LaunchedEffect(session.token, reloadKey) {
-        state = DashState.Loading
-        state = try {
-            DashState.Ready(DashboardRepository.authority(session.token))
-        } catch (e: SessionExpiredException) {
-            onLogout()
-            return@LaunchedEffect
-        } catch (e: ApiException) {
-            DashState.Failed(e.userMessage())
-        }
-    }
-
-    DashboardFrame(
-        session = session,
-        headerColors = AuthorityHeader,
-        title = "Supreme Authority Dashboard",
-        onRefresh = { reloadKey++ },
-        onLogout = onLogout
-    ) {
-        when (val s = state) {
-            DashState.Loading -> LoadingBlock()
-            is DashState.Failed -> ErrorBlock(s.message) { reloadKey++ }
-            is DashState.Ready -> {
-                val d = s.data
-
-                CompletionCard(rate = d.completionRate, completed = d.completed, total = d.totalInspections)
-
-                StatGrid(
-                    listOf(
-                        StatItem("Inspectors", d.inspectors, Color(0xFF1D5FE0), Color(0xFFE3EEFF)),
-                        StatItem("In Progress", d.inProgress, Color(0xFFB7791F), Color(0xFFFFF1D6)),
-                        StatItem("Scheduled", d.scheduled, Color(0xFF5B3FC4), Color(0xFFEBE5FF)),
-                        StatItem("Violations", d.violations, Color(0xFFC53030), Color(0xFFFDE4E4))
-                    )
-                )
-
-                SectionTitle("Inspector Monitoring")
-                if (d.inspectorSummaries.isEmpty()) {
-                    EmptyBlock("No inspectors found.")
-                } else {
-                    d.inspectorSummaries.forEach { InspectorMonitorCard(it) }
-                }
-
-                SectionTitle("Recent Inspections")
-                if (d.recent.isEmpty()) {
-                    EmptyBlock("No inspections recorded yet.")
-                } else {
-                    d.recent.forEach { InspectionCard(it, showInspector = true) }
+                    val shown = d.inspections.filter { filter == "All" || it.status == filter }
+                    if (shown.isEmpty()) {
+                        EmptyBlock(
+                            if (d.inspections.isEmpty()) "No inspections have been assigned to you yet."
+                            else "No inspections with status \"$filter\"."
+                        )
+                    } else {
+                        shown.forEach { InspectionCard(it) { openCode = it.code } }
+                    }
                 }
             }
         }
@@ -383,17 +346,6 @@ private fun StatGrid(items: List<StatItem>) {
 }
 
 @Composable
-private fun SectionTitle(text: String) {
-    Text(
-        text = text,
-        color = PortalNavy,
-        fontSize = 19.sp,
-        fontWeight = FontWeight.ExtraBold,
-        modifier = Modifier.padding(top = 6.dp)
-    )
-}
-
-@Composable
 private fun FilterChipPill(label: String, selected: Boolean, onClick: () -> Unit) {
     Text(
         text = label,
@@ -409,26 +361,15 @@ private fun FilterChipPill(label: String, selected: Boolean, onClick: () -> Unit
     )
 }
 
-private fun statusColors(status: String): Pair<Color, Color> = when (status) {
-    "Completed" -> Color(0xFF1E8E4E) to Color(0xFFDDF5E7)
-    "In Progress" -> Color(0xFFB7791F) to Color(0xFFFFF1D6)
-    "Violation Found" -> Color(0xFFC53030) to Color(0xFFFDE4E4)
-    else -> Color(0xFF1D5FE0) to Color(0xFFE3EEFF)
-}
-
-private val IsoDate = DateTimeFormatter.ISO_LOCAL_DATE
-private val ShownDate = DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.ENGLISH)
-
-private fun prettyDate(iso: String): String =
-    try { LocalDate.parse(iso, IsoDate).format(ShownDate) } catch (_: Exception) { iso }
-
 @Composable
-private fun InspectionCard(item: InspectionItem, showInspector: Boolean) {
-    val (fg, bg) = statusColors(item.status)
+private fun InspectionCard(item: InspectionItem, onClick: () -> Unit) {
+    val (fg, bg) = statusStyle(item.status)
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(3.dp, RoundedCornerShape(20.dp), ambientColor = Color(0x261E5FB0), spotColor = Color(0x261E5FB0)),
+            .shadow(3.dp, RoundedCornerShape(20.dp), ambientColor = Color(0x261E5FB0), spotColor = Color(0x261E5FB0))
+            .clip(RoundedCornerShape(20.dp))
+            .clickable(role = Role.Button) { onClick() },
         shape = RoundedCornerShape(20.dp),
         color = Color.White
     ) {
@@ -441,6 +382,10 @@ private fun InspectionCard(item: InspectionItem, showInspector: Boolean) {
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f)
                 )
+                if (item.priority.isNotBlank()) {
+                    PriorityPill(item.priority)
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
                 Text(
                     text = item.status,
                     color = fg,
@@ -456,14 +401,14 @@ private fun InspectionCard(item: InspectionItem, showInspector: Boolean) {
             Spacer(modifier = Modifier.height(6.dp))
 
             Text(
-                text = item.establishment,
+                text = item.product,
                 color = PortalNavy,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
                 lineHeight = 20.sp
             )
             Text(
-                text = "${item.city} • ${item.commodity}",
+                text = "${item.establishment} • ${item.city}",
                 color = PortalMuted,
                 fontSize = 13.sp,
                 lineHeight = 17.sp
@@ -480,16 +425,12 @@ private fun InspectionCard(item: InspectionItem, showInspector: Boolean) {
                     modifier = Modifier.weight(1f)
                 )
                 Text(
-                    text = prettyDate(item.scheduledDate),
+                    text = fmtSchedule(item.scheduledDate, item.scheduledTime),
                     color = PortalMuted,
                     fontSize = 12.sp
                 )
             }
 
-            if (showInspector && item.inspectorName.isNotBlank()) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(text = "Inspector: ${item.inspectorName}", color = PortalMuted, fontSize = 12.sp)
-            }
             if (item.violations > 0) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
@@ -499,119 +440,18 @@ private fun InspectionCard(item: InspectionItem, showInspector: Boolean) {
                     fontWeight = FontWeight.SemiBold
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun CompletionCard(rate: Int, completed: Int, total: Int) {
-    val safeRate = rate.coerceIn(0, 100)
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .shadow(4.dp, RoundedCornerShape(22.dp), ambientColor = Color(0x331B6B5A), spotColor = Color(0x331B6B5A)),
-        shape = RoundedCornerShape(22.dp),
-        color = Color.White
-    ) {
-        Column(modifier = Modifier.padding(18.dp)) {
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(
-                    text = "$safeRate%",
-                    color = Color(0xFF1B6B5A),
-                    fontSize = 36.sp,
-                    fontWeight = FontWeight.ExtraBold
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Text(
-                    text = "inspection completion rate",
-                    color = PortalMuted,
-                    fontSize = 14.sp,
-                    modifier = Modifier.padding(bottom = 6.dp)
-                )
-            }
-            Spacer(modifier = Modifier.height(10.dp))
-            ProgressBar(fraction = safeRate / 100f, color = Color(0xFF1B9E77))
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "$completed of $total inspections completed",
-                color = PortalMuted,
-                fontSize = 13.sp
+                text = when (item.status) {
+                    CaseStatus.ASSIGNED, CaseStatus.SCHEDULED -> "Tap to open and start"
+                    CaseStatus.IN_PROGRESS -> "Tap to submit your findings"
+                    else -> "Tap for the full track record"
+                },
+                color = Color(0xFF1D5FE0),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
             )
         }
-    }
-}
-
-@Composable
-private fun ProgressBar(fraction: Float, color: Color) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(10.dp)
-            .clip(RoundedCornerShape(50))
-            .background(Color(0xFFE6EEF8))
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(fraction.coerceIn(0f, 1f))
-                .fillMaxHeight()
-                .clip(RoundedCornerShape(50))
-                .background(color)
-        )
-    }
-}
-
-@Composable
-private fun InspectorMonitorCard(i: InspectorSummary) {
-    val fraction = if (i.assigned == 0) 0f else i.completed.toFloat() / i.assigned
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .shadow(3.dp, RoundedCornerShape(20.dp), ambientColor = Color(0x261E5FB0), spotColor = Color(0x261E5FB0)),
-        shape = RoundedCornerShape(20.dp),
-        color = Color.White
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(42.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFFE3EEFF)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = i.name.firstOrNull()?.uppercase() ?: "?",
-                        color = Color(0xFF1D5FE0),
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.ExtraBold
-                    )
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(i.name, color = PortalNavy, fontSize = 16.sp, fontWeight = FontWeight.Bold, lineHeight = 20.sp)
-                    Text("${i.officerId} • ${i.office}", color = PortalMuted, fontSize = 12.sp, lineHeight = 15.sp)
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-            ProgressBar(fraction = fraction, color = Color(0xFF1D5FE0))
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                MiniStat("Assigned", i.assigned, PortalNavy)
-                MiniStat("Done", i.completed, Color(0xFF1E8E4E))
-                MiniStat("Active", i.inProgress, Color(0xFFB7791F))
-                MiniStat("Violations", i.violations, Color(0xFFC53030))
-            }
-        }
-    }
-}
-
-@Composable
-private fun MiniStat(label: String, value: Int, color: Color) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value.toString(), color = color, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
-        Text(label, color = PortalMuted, fontSize = 11.sp)
     }
 }
 

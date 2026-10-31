@@ -148,51 +148,54 @@ fun PortalTopBar(onBack: () -> Unit, backEnabled: Boolean = true) {
             )
         }
 
-        Row(
-            modifier = Modifier.align(Alignment.Center),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // The logo JPEG has a white backdrop; multiply keeps only the artwork
-            val logo = ImageBitmap.imageResource(id = R.drawable.complyvision_logo)
-            Canvas(modifier = Modifier.size(44.dp)) {
-                drawImage(
-                    image = logo,
-                    dstSize = IntSize(size.width.toInt(), size.height.toInt()),
-                    filterQuality = FilterQuality.High,
-                    blendMode = BlendMode.Multiply
-                )
-            }
+        BrandMark(Modifier.align(Alignment.Center))
+    }
+}
 
-            Spacer(modifier = Modifier.width(4.dp))
+/** Logo + "ComplyVision" wordmark with the green leaf accent */
+@Composable
+fun BrandMark(modifier: Modifier = Modifier) {
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        // The logo JPEG has a white backdrop; multiply keeps only the artwork
+        val logo = ImageBitmap.imageResource(id = R.drawable.complyvision_logo)
+        Canvas(modifier = Modifier.size(44.dp)) {
+            drawImage(
+                image = logo,
+                dstSize = IntSize(size.width.toInt(), size.height.toInt()),
+                filterQuality = FilterQuality.High,
+                blendMode = BlendMode.Multiply
+            )
+        }
 
-            Box {
-                Text(
-                    text = buildAnnotatedString {
-                        withStyle(SpanStyle(color = PortalNavy, fontWeight = FontWeight.ExtraBold)) {
-                            append("Comply")
-                        }
-                        withStyle(SpanStyle(color = Color(0xFF0052B4), fontWeight = FontWeight.ExtraBold)) {
-                            append("Vision")
-                        }
-                    },
-                    fontSize = 22.sp,
-                    letterSpacing = (-0.5).sp
-                )
-                // Green leaf accent above the second 'i' in Vision
-                Canvas(
-                    modifier = Modifier
-                        .offset(x = 113.dp, y = (-1).dp)
-                        .size(9.dp)
-                ) {
-                    val path = Path().apply {
-                        moveTo(0f, size.height)
-                        lineTo(size.width * 0.3f, 0f)
-                        lineTo(size.width, 0f)
-                        lineTo(size.width * 0.7f, size.height)
-                        close()
+        Spacer(modifier = Modifier.width(4.dp))
+
+        Box {
+            Text(
+                text = buildAnnotatedString {
+                    withStyle(SpanStyle(color = PortalNavy, fontWeight = FontWeight.ExtraBold)) {
+                        append("Comply")
                     }
-                    drawPath(path = path, color = Color(0xFF4CAF50))
+                    withStyle(SpanStyle(color = Color(0xFF0052B4), fontWeight = FontWeight.ExtraBold)) {
+                        append("Vision")
+                    }
+                },
+                fontSize = 22.sp,
+                letterSpacing = (-0.5).sp
+            )
+            // Green leaf accent above the second 'i' in Vision
+            Canvas(
+                modifier = Modifier
+                    .offset(x = 113.dp, y = (-1).dp)
+                    .size(9.dp)
+            ) {
+                val path = Path().apply {
+                    moveTo(0f, size.height)
+                    lineTo(size.width * 0.3f, 0f)
+                    lineTo(size.width, 0f)
+                    lineTo(size.width * 0.7f, size.height)
+                    close()
                 }
+                drawPath(path = path, color = Color(0xFF4CAF50))
             }
         }
     }

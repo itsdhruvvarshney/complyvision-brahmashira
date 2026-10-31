@@ -275,7 +275,7 @@ fun ComplyVisionApp(
         } ?: LaunchedEffect(Unit) { navigateBack() }
 
         AppScreen.AUTHORITY_DASHBOARD -> officerSession?.let { session ->
-            AuthorityDashboardScreen(session = session, onLogout = ::logoutOfficer)
+            AuthorityShellScreen(session = session, onLogout = ::logoutOfficer)
         } ?: LaunchedEffect(Unit) { navigateBack() }
     }
 }

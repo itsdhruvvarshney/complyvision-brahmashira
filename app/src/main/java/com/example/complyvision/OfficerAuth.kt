@@ -157,49 +157,29 @@ object OfficerRepository {
 }
 
 // ============================================================================
-// Dashboard data
+// Inspector dashboard data (the Supreme Authority side lives in AuthorityData.kt)
 // ============================================================================
 
 data class InspectionItem(
     val code: String,
     val establishment: String,
     val city: String,
-    val commodity: String,
+    val product: String,
+    val priority: String,
     val type: String,
     val status: String,
     val scheduledDate: String,
-    val violations: Int,
-    val inspectorName: String
+    val scheduledTime: String,
+    val violations: Int
 )
 
 data class InspectorDashboardData(
     val assigned: Int,
     val inProgress: Int,
+    val inReview: Int,
     val completed: Int,
     val violations: Int,
     val inspections: List<InspectionItem>
-)
-
-data class InspectorSummary(
-    val officerId: String,
-    val name: String,
-    val office: String,
-    val assigned: Int,
-    val completed: Int,
-    val inProgress: Int,
-    val violations: Int
-)
-
-data class AuthorityDashboardData(
-    val inspectors: Int,
-    val totalInspections: Int,
-    val completed: Int,
-    val inProgress: Int,
-    val scheduled: Int,
-    val violations: Int,
-    val completionRate: Int,
-    val inspectorSummaries: List<InspectorSummary>,
-    val recent: List<InspectionItem>
 )
 
 class SessionExpiredException : Exception("Session expired")
@@ -208,69 +188,34 @@ object DashboardRepository {
 
     suspend fun inspector(token: String): InspectorDashboardData {
         val r = SupabaseApi.rpc("inspector_dashboard", JSONObject().put("p_token", token))
-        ensureOk(r)
-        val stats = r.getJSONObject("stats")
-        return InspectorDashboardData(
-            assigned = stats.optInt("assigned"),
-            inProgress = stats.optInt("in_progress"),
-            completed = stats.optInt("completed"),
-            violations = stats.optInt("violations"),
-            inspections = r.optJSONArray("inspections").toInspections()
-        )
-    }
-
-    suspend fun authority(token: String): AuthorityDashboardData {
-        val r = SupabaseApi.rpc("authority_dashboard", JSONObject().put("p_token", token))
-        ensureOk(r)
-        val stats = r.getJSONObject("stats")
-        val inspectors = r.optJSONArray("inspectors") ?: JSONArray()
-        return AuthorityDashboardData(
-            inspectors = stats.optInt("inspectors"),
-            totalInspections = stats.optInt("total_inspections"),
-            completed = stats.optInt("completed"),
-            inProgress = stats.optInt("in_progress"),
-            scheduled = stats.optInt("scheduled"),
-            violations = stats.optInt("violations"),
-            completionRate = stats.optInt("completion_rate"),
-            inspectorSummaries = (0 until inspectors.length()).map {
-                val o = inspectors.getJSONObject(it)
-                InspectorSummary(
-                    officerId = o.optString("officer_id"),
-                    name = o.optString("name"),
-                    office = o.optString("office"),
-                    assigned = o.optInt("assigned"),
-                    completed = o.optInt("completed"),
-                    inProgress = o.optInt("in_progress"),
-                    violations = o.optInt("violations")
-                )
-            },
-            recent = r.optJSONArray("recent").toInspections()
-        )
-    }
-
-    private fun ensureOk(r: JSONObject) {
         if (!r.optBoolean("ok")) {
             if (r.optString("code") == "session_expired") throw SessionExpiredException()
             throw ApiException(ApiFailure.BAD_RESPONSE, "Dashboard request rejected")
         }
-    }
-
-    private fun JSONArray?.toInspections(): List<InspectionItem> {
-        if (this == null) return emptyList()
-        return (0 until length()).map {
-            val o = getJSONObject(it)
-            InspectionItem(
-                code = o.optString("code"),
-                establishment = o.optString("establishment"),
-                city = o.optString("city"),
-                commodity = o.optString("commodity"),
-                type = o.optString("type"),
-                status = o.optString("status"),
-                scheduledDate = o.optString("scheduled_date"),
-                violations = o.optInt("violations"),
-                inspectorName = o.optString("inspector")
-            )
-        }
+        val stats = r.getJSONObject("stats")
+        val list = r.optJSONArray("inspections") ?: JSONArray()
+        return InspectorDashboardData(
+            assigned = stats.optInt("assigned"),
+            inProgress = stats.optInt("in_progress"),
+            inReview = stats.optInt("in_review"),
+            completed = stats.optInt("completed"),
+            violations = stats.optInt("violations"),
+            inspections = (0 until list.length()).map {
+                val o = list.getJSONObject(it)
+                InspectionItem(
+                    code = o.str("code"),
+                    establishment = o.str("establishment"),
+                    city = o.str("city"),
+                    product = o.str("product").ifBlank { o.str("commodity") },
+                    priority = o.str("priority"),
+                    type = o.str("type"),
+                    status = o.str("status"),
+                    scheduledDate = o.str("scheduled_date"),
+                    scheduledTime = o.str("scheduled_time"),
+                    violations = o.optInt("violations")
+                )
+            }
+        )
     }
 }
 
