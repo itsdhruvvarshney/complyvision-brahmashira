@@ -4,8 +4,12 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node dev.js",
+    "dev:web": "vite",
+    "dev:api": "npm --prefix ../backend run dev",
+    "dev:analysis": "../backend/analysis-service/.venv/bin/python -m uvicorn api.main:app --app-dir ../backend/analysis-service --reload --host 127.0.0.1 --port 8000",
     "build": "vite build",
+    "test": "node --test src/services/*.test.js",
     "lint": "oxlint",
     "preview": "vite preview"
   },

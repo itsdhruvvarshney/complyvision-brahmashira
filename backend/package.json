@@ -1,0 +1,21 @@
+{
+  "name": "complyvision-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ComplyVision email verification API",
+  "main": "otp-server.js",
+  "scripts": {
+    "start": "node otp-server.js",
+    "dev": "node otp-server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "nodemailer": "^6.10.0"
+  }
+}

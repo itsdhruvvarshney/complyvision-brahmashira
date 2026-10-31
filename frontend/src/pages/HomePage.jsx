@@ -3,6 +3,7 @@ import { Hero } from '../components/Hero'
 import { ProductDemo } from '../components/ProductDemo'
 import { Workflow } from '../components/Workflow'
 import { HeroDecorations } from '../components/HeroDecorations'
+import { PortalFooter } from '../components/PortalFooter'
 
 export function HomePage() {
   return (
@@ -21,10 +22,7 @@ export function HomePage() {
         </ul>
         <ProductDemo />
         <Workflow />
-        <footer className="site-footer">
-          <span>© ComplyVision</span>
-          <span>Demo data shown for preview only. No real inspection results.</span>
-        </footer>
+        <PortalFooter />
       </div>
     </main>
   )

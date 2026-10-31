@@ -18,7 +18,7 @@ export function Header() {
       <button className="icon-button type-button" type="button" aria-pressed={large} aria-label="Larger text" onClick={() => setLarge(!large)}>A+</button>
       <button className="icon-button type-button" type="button" aria-pressed={contrast} aria-label="High contrast" onClick={() => setContrast(!contrast)}>◐</button>
       <button className="icon-button" type="button" aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? '☀' : '☾'}</button>
-      <button className="sign-in" type="button">Sign in</button>
+      <a className="sign-in" href="#/login">Sign in</a>
     </div>
   </nav>
 }
