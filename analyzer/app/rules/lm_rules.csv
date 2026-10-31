@@ -1,0 +1,17 @@
+id,sort_order,title,reference,category,severity,validator,description
+LM-01,1,Name & address of manufacturer / packer,"LM (PC) Rules 2011, Rule 6(1)(a)",Mandatory declaration,Major,manufacturer,"The label must carry the name and complete address of the manufacturer, packer or importer."
+LM-02,2,Country of origin (imported goods),"LM (PC) Rules 2011, Rule 6(1)(b)",Mandatory declaration,Major,country_of_origin,Imported packages must state the country of origin or manufacture.
+LM-03,3,Common or generic name of the commodity,"LM (PC) Rules 2011, Rule 6(1)(c)",Mandatory declaration,Major,generic_name,The common or generic name of the commodity must be declared.
+LM-04,4,Net quantity in standard units,"LM (PC) Rules 2011, Rule 6(1)(d)",Mandatory declaration,Critical,net_quantity,"Net quantity must be declared in standard units of weight, measure or number (g, kg, ml, L, N)."
+LM-05,5,Month & year of manufacture / packing,"LM (PC) Rules 2011, Rule 6(1)(e)",Mandatory declaration,Major,mfg_date,"The month and year in which the commodity is manufactured, packed or imported must be declared."
+LM-06,6,Retail sale price (MRP) declared,"LM (PC) Rules 2011, Rule 6(1)(f)",Price declaration,Critical,mrp_declared,The maximum retail price must be declared on the package.
+LM-07,7,"MRP inclusive of all taxes, in Rs. / ₹","LM (PC) Rules 2011, Rule 6(1)(f), Rule 2(m)",Price declaration,Major,mrp_format,MRP must be stated in Indian currency and as inclusive of all taxes.
+LM-08,8,Unit sale price declared,"LM (PC) Amendment Rules 2021, Rule 6(1)(f)",Price declaration,Minor,unit_sale_price,Unit sale price (price per kg / L / unit) must accompany the MRP.
+LM-09,9,Consumer care details,"LM (PC) Rules 2011, Rule 6(1)(g)",Mandatory declaration,Major,customer_care,"Name, address, telephone number and e-mail for consumer complaints must be declared."
+LM-10,10,Best before / use-by date,"LM (PC) Rules 2011, Rule 6(1)(h)",Mandatory declaration,Major,best_before,Commodities that may become unfit for consumption must state a best before or use-by date.
+LM-11,11,Height of net-quantity numerals,"LM (PC) Rules 2011, Rule 7",Legibility,Major,numeral_height,Numerals of the net quantity declaration must meet the minimum height for the declared quantity.
+LM-12,12,Legibility & contrast of declarations,"LM (PC) Rules 2011, Rule 8",Legibility,Minor,contrast,"Declarations must be legible and prominent, contrasting with the background."
+LM-13,13,MRP matches the case record,Case cross-check,Case cross-check,Critical,mrp_matches_case,The MRP on the pack must match the MRP recorded for the case / product.
+LM-14,14,Date consistency,"LM (PC) Rules 2011, Rule 6(1)(e), 6(1)(h)",Consistency,Major,date_consistency,Manufacture date must not be in the future and best before must fall after manufacture.
+LM-15,15,Evidence image quality,ComplyVision evidence standard,Evidence quality,Minor,image_quality,"The captured image must be sharp, evenly lit and readable for an automated decision."
+LM-16,16,Net quantity matches the declared product,Case cross-check,Case cross-check,Critical,quantity_matches_case,The net quantity on the pack must match the quantity recorded for the product under inspection.

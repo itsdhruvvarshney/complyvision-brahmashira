@@ -217,7 +217,8 @@ internal val PeriodOptions = listOf(7, 30, 90, 365, 0)
 internal enum class AIcon {
     HOME, CLIPBOARD, PEOPLE, CHART, MENU, BELL, USER, CHECK_CIRCLE, CROSS_CIRCLE, HOURGLASS, TREND_UP,
     ARROW_RIGHT, ARROW_UP, ARROW_DOWN, SORT, MORE, SEARCH, CALENDAR, CLOCK, DOWNLOAD, PIN, PHONE, MAIL, BOX,
-    CLOSE, FLAG, BAN, PAUSE, FILTER, CHEVRON_DOWN, CHEVRON_LEFT, DOC, ID, REFRESH, LOGOUT, BUILDING, SHIELD, PLUS
+    CLOSE, FLAG, BAN, PAUSE, FILTER, CHEVRON_DOWN, CHEVRON_LEFT, DOC, ID, REFRESH, LOGOUT, BUILDING, SHIELD, PLUS,
+    FLASH, UPLOAD, CAMERA
 }
 
 @Composable
@@ -351,6 +352,16 @@ private fun DrawScope.drawAIcon(icon: AIcon, tint: Color) {
             line(0.34f, 0.5f, 0.7f, 0.5f); line(0.34f, 0.66f, 0.7f, 0.66f); line(0.34f, 0.8f, 0.52f, 0.8f)
         }
         AIcon.PLUS -> { line(0.5f, 0.2f, 0.5f, 0.8f); line(0.2f, 0.5f, 0.8f, 0.5f) }
+        AIcon.FLASH -> poly(0.58f, 0.08f, 0.24f, 0.54f, 0.48f, 0.54f, 0.4f, 0.92f, 0.76f, 0.42f, 0.52f, 0.42f, close = true)
+        AIcon.UPLOAD -> {
+            line(0.5f, 0.64f, 0.5f, 0.14f); poly(0.28f, 0.36f, 0.5f, 0.14f, 0.72f, 0.36f)
+            poly(0.14f, 0.62f, 0.14f, 0.86f, 0.86f, 0.86f, 0.86f, 0.62f)
+        }
+        AIcon.CAMERA -> {
+            rrect(0.1f, 0.28f, 0.8f, 0.56f)
+            poly(0.34f, 0.28f, 0.4f, 0.16f, 0.6f, 0.16f, 0.66f, 0.28f)
+            ring(0.5f, 0.56f, 0.15f)
+        }
         else -> Unit
     }
 }

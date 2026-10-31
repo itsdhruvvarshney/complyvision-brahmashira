@@ -8,10 +8,16 @@ plugins {
 // Supabase credentials live in local.properties (git-ignored), never in source control:
 //   supabase.url=https://<project-ref>.supabase.co
 //   supabase.anonKey=<publishable / anon key>
+// The package analyzer (FastAPI service in /analyzer) is configured the same way:
+//   analyzer.url=http://10.0.2.2:8000      (emulator -> host; use the PC's LAN IP for a real phone)
+//   analyzer.apiKey=<optional, must match ANALYZER_API_KEYS on the server>
 val localProps = Properties().apply {
     val f = rootProject.file("local.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
+// A -P<key>=<value> Gradle property overrides local.properties (handy for pointing a build at a test backend)
+fun config(key: String, default: String = ""): String =
+    (project.findProperty(key) as String?) ?: localProps.getProperty(key, default)
 
 android {
     namespace = "com.example.complyvision"
@@ -26,8 +32,10 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        buildConfigField("String", "SUPABASE_URL", "\"${localProps.getProperty("supabase.url", "")}\"")
-        buildConfigField("String", "SUPABASE_ANON_KEY", "\"${localProps.getProperty("supabase.anonKey", "")}\"")
+        buildConfigField("String", "SUPABASE_URL", "\"${config("supabase.url")}\"")
+        buildConfigField("String", "SUPABASE_ANON_KEY", "\"${config("supabase.anonKey")}\"")
+        buildConfigField("String", "ANALYZER_URL", "\"${config("analyzer.url", "http://10.0.2.2:8000")}\"")
+        buildConfigField("String", "ANALYZER_API_KEY", "\"${config("analyzer.apiKey")}\"")
     }
 
     buildTypes {
@@ -60,6 +68,12 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+
+    // In-app package scanner
+    implementation("androidx.camera:camera-core:1.4.2")
+    implementation("androidx.camera:camera-camera2:1.4.2")
+    implementation("androidx.camera:camera-lifecycle:1.4.2")
+    implementation("androidx.camera:camera-view:1.4.2")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
