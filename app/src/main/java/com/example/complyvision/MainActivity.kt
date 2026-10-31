@@ -151,10 +151,9 @@ enum class AppScreen {
     CONSUMER_DASHBOARD,
     BUSINESS_PORTAL_HOME,
     ACCESSIBILITY_HOME,
-    LM_ROLE_SELECTION,
-    PRE_FSSAI_HOME,
-    BIS_VERIFICATION_HOME,
-    INSPECTOR_LOGIN,
+    ORG_PRE_VERIFICATION_HOME,
+    OFFICER_LOGIN,
+    INSPECTOR_DASHBOARD,
     AUTHORITY_DASHBOARD
 }
 
@@ -166,6 +165,7 @@ fun ComplyVisionApp(
     onStopSpeech: () -> Unit
 ) {
     val screenStack = remember { mutableStateListOf(AppScreen.SPLASH) }
+    var officerSession by remember { mutableStateOf<OfficerSession?>(null) }
     val currentScreen = screenStack.last()
 
     // Ensure voice instructions are announced once when Main Home Screen opens
@@ -187,6 +187,11 @@ fun ComplyVisionApp(
             onStopSpeech()
             screenStack.removeAt(screenStack.lastIndex)
         }
+    }
+
+    fun logoutOfficer() {
+        officerSession = null
+        navigateBack()
     }
 
     // Open Accessibility Mode automatically when Volume-Up is pressed 3 times
@@ -240,20 +245,9 @@ fun ComplyVisionApp(
             onBack = ::navigateBack
         )
 
-        AppScreen.LM_ROLE_SELECTION -> LegalMetrologyRoleScreen(
-            onNavigate = ::navigateTo,
-            onBack = ::navigateBack
-        )
-
-        AppScreen.PRE_FSSAI_HOME -> PlaceholderModuleScreen(
-            title = "Pre-FSSAI Verification",
-            subtitle = "Preliminary Food Label & FSSAI Requirement Check",
-            onBack = ::navigateBack
-        )
-
-        AppScreen.BIS_VERIFICATION_HOME -> PlaceholderModuleScreen(
-            title = "BIS Verification",
-            subtitle = "Preliminary Bureau of Indian Standards Check",
+        AppScreen.ORG_PRE_VERIFICATION_HOME -> PlaceholderModuleScreen(
+            title = "Organisation Pre-Verification",
+            subtitle = "Verify organisation compliance documents before regulatory submission",
             onBack = ::navigateBack
         )
 
@@ -263,17 +257,26 @@ fun ComplyVisionApp(
             onBack = ::navigateBack
         )
 
-        AppScreen.INSPECTOR_LOGIN -> PlaceholderModuleScreen(
-            title = "Inspector Login",
-            subtitle = "Authenticate with Login ID & Password to view assigned tasks",
-            onBack = ::navigateBack
+        AppScreen.OFFICER_LOGIN -> OfficerLoginScreen(
+            onBack = ::navigateBack,
+            onLoggedIn = { session ->
+                officerSession = session
+                // Replace the login page so Back from a dashboard never returns to it
+                screenStack.removeAt(screenStack.lastIndex)
+                screenStack.add(
+                    if (session.role == OfficerRole.SUPREME_AUTHORITY) AppScreen.AUTHORITY_DASHBOARD
+                    else AppScreen.INSPECTOR_DASHBOARD
+                )
+            }
         )
 
-        AppScreen.AUTHORITY_DASHBOARD -> PlaceholderModuleScreen(
-            title = "Supreme Authority Dashboard",
-            subtitle = "Inspector Monitoring, Task Oversight & Performance Analytics",
-            onBack = ::navigateBack
-        )
+        AppScreen.INSPECTOR_DASHBOARD -> officerSession?.let { session ->
+            InspectorDashboardScreen(session = session, onLogout = ::logoutOfficer)
+        } ?: LaunchedEffect(Unit) { navigateBack() }
+
+        AppScreen.AUTHORITY_DASHBOARD -> officerSession?.let { session ->
+            AuthorityDashboardScreen(session = session, onLogout = ::logoutOfficer)
+        } ?: LaunchedEffect(Unit) { navigateBack() }
     }
 }
 
@@ -1055,602 +1058,6 @@ fun StatVectorIcon(iconType: Int, modifier: Modifier = Modifier) {
                 }
                 drawPath(leaf, Color(0xFF2E9B3C))
             }
-        }
-    }
-}
-
-// ============================================================================
-// EXISTING SUBMODULE SCREENS (Preserved 100% intact)
-// ============================================================================
-
-/**
- * Business Portal screen matching the reference mockup (hero, three submodule cards, footer banner)
- */
-@Composable
-fun BusinessPortalHomeScreen(
-    onNavigate: (AppScreen) -> Unit,
-    onBack: () -> Unit
-) {
-    val pageTop = Color(0xFFEEF5FD)
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(pageTop, Color(0xFFEAF2FC), Color(0xFFF6F9FD))
-                )
-            )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .navigationBarsPadding()
-        ) {
-            // 1. HERO: background art + back button + logo + title
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1536f / 1024f)
-            ) {
-                Image(
-                    painter = painterResource(id = R.drawable.business_hero_bg),
-                    contentDescription = null,
-                    contentScale = ContentScale.FillBounds,
-                    modifier = Modifier.fillMaxSize()
-                )
-
-                // Soft fade so the hero blends into the page background
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(36.dp)
-                        .align(Alignment.BottomCenter)
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(Color.Transparent, pageTop.copy(alpha = 0.9f))
-                            )
-                        )
-                )
-
-                // Header: round back button + centered brand logo
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .statusBarsPadding()
-                        .padding(horizontal = 16.dp)
-                        .padding(top = 10.dp)
-                        .height(42.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.CenterStart)
-                            .size(40.dp)
-                            .shadow(4.dp, CircleShape, ambientColor = Color(0x330052B4), spotColor = Color(0x330052B4))
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.85f))
-                            .border(1.dp, Color.White, CircleShape)
-                            .clickable { onBack() },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        ChevronIcon(
-                            color = Color(0xFF071D36),
-                            pointsLeft = true,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-
-                    Row(
-                        modifier = Modifier.align(Alignment.Center),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // The logo JPEG has a white backdrop; multiply keeps only the artwork
-                        val logo = ImageBitmap.imageResource(id = R.drawable.complyvision_logo)
-                        Canvas(modifier = Modifier.size(44.dp)) {
-                            drawImage(
-                                image = logo,
-                                dstSize = IntSize(size.width.toInt(), size.height.toInt()),
-                                filterQuality = FilterQuality.High,
-                                blendMode = BlendMode.Multiply
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(4.dp))
-
-                        Box {
-                            Text(
-                                text = buildAnnotatedString {
-                                    withStyle(
-                                        SpanStyle(
-                                            color = Color(0xFF071D36),
-                                            fontWeight = FontWeight.ExtraBold
-                                        )
-                                    ) {
-                                        append("Comply")
-                                    }
-                                    withStyle(
-                                        SpanStyle(
-                                            color = Color(0xFF0052B4),
-                                            fontWeight = FontWeight.ExtraBold
-                                        )
-                                    ) {
-                                        append("Vision")
-                                    }
-                                },
-                                fontSize = 22.sp,
-                                letterSpacing = (-0.5).sp
-                            )
-                            // Green leaf accent above the second 'i' in Vision
-                            Canvas(
-                                modifier = Modifier
-                                    .offset(x = 113.dp, y = (-1).dp)
-                                    .size(9.dp)
-                            ) {
-                                val path = Path().apply {
-                                    moveTo(0f, size.height)
-                                    lineTo(size.width * 0.3f, 0f)
-                                    lineTo(size.width, 0f)
-                                    lineTo(size.width * 0.7f, size.height)
-                                    close()
-                                }
-                                drawPath(path = path, color = Color(0xFF4CAF50))
-                            }
-                        }
-                    }
-                }
-
-                // Title + subtitle
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(start = 22.dp, top = 108.dp)
-                ) {
-                    Text(
-                        text = buildAnnotatedString {
-                            withStyle(SpanStyle(color = Color(0xFF050B18))) {
-                                append("Business\n")
-                            }
-                            withStyle(SpanStyle(color = Color(0xFF0A63F0))) {
-                                append("Portal")
-                            }
-                        },
-                        fontSize = 37.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        lineHeight = 37.sp,
-                        letterSpacing = (-1).sp
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Text(
-                        text = "Compliance solutions for\nmanufacturers, importers,\nretailers and regulatory teams.",
-                        fontSize = 13.sp,
-                        lineHeight = 16.sp,
-                        color = Color(0xFF566A85)
-                    )
-                }
-            }
-
-            // 2. SUBMODULE CARDS
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                PortalSubmoduleCard(
-                    title = "Legal Metrology",
-                    badgeText = "LM",
-                    description = "Verify packaged commodity\ndeclarations as per Legal\nMetrology standards.",
-                    bgDrawableId = R.drawable.card_lm_bg,
-                    bgAspect = 1600f / 535f,
-                    tileCenterFrac = 0.407f,
-                    tileLeftFrac = 0.039f,
-                    bgZoom = 1.28f,
-                    accentColor = Color(0xFF1D4ED8),
-                    badgeBackground = Color(0xFFD6E7FF),
-                    shadowColor = Color(0xFF2F6FE0),
-                    onClick = { onNavigate(AppScreen.LM_ROLE_SELECTION) }
-                )
-
-                PortalSubmoduleCard(
-                    title = "Pre-FSSAI Verification",
-                    badgeText = "FSSAI",
-                    description = "Check food product compliance\nbefore FSSAI application.",
-                    bgDrawableId = R.drawable.card_fssai_bg,
-                    bgAspect = 1600f / 534f,
-                    tileCenterFrac = 0.481f,
-                    tileLeftFrac = 0.0375f,
-                    bgZoom = 1.07f,
-                    accentColor = Color(0xFF1E7E45),
-                    badgeBackground = Color(0xFFCFF1DB),
-                    shadowColor = Color(0xFF2E9B5C),
-                    onClick = { onNavigate(AppScreen.PRE_FSSAI_HOME) }
-                )
-
-                PortalSubmoduleCard(
-                    title = "BIS Verification",
-                    badgeText = "BIS",
-                    description = "Verify BIS certification and\nstandards compliance.",
-                    bgDrawableId = R.drawable.card_bis_bg,
-                    bgAspect = 1600f / 533f,
-                    tileCenterFrac = 0.5f,
-                    tileLeftFrac = 0f,
-                    bgZoom = 1f,
-                    accentColor = Color(0xFFEA580C),
-                    badgeBackground = Color(0xFFFFE0CC),
-                    shadowColor = Color(0xFFE59A5E),
-                    leadingIcon = { size -> BisLogoTile(size = size) },
-                    onClick = { onNavigate(AppScreen.BIS_VERIFICATION_HOME) }
-                )
-
-                // 3. FOOTER BANNER
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(386f / 101f)
-                        .shadow(
-                            6.dp,
-                            RoundedCornerShape(24.dp),
-                            ambientColor = Color(0x331E5FB0),
-                            spotColor = Color(0x331E5FB0)
-                        )
-                        .clip(RoundedCornerShape(24.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.8f), RoundedCornerShape(24.dp))
-                ) {
-                    Image(
-                        painter = painterResource(id = R.drawable.business_footer_bg),
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        alignment = Alignment.BottomEnd,
-                        modifier = Modifier.fillMaxSize()
-                    )
-
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.CenterStart)
-                            .padding(start = 20.dp)
-                    ) {
-                        Text(
-                            text = "Ensure Compliance.\nBuild Consumer Trust.",
-                            fontSize = 15.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            lineHeight = 18.sp,
-                            color = Color(0xFF050B18)
-                        )
-                        Spacer(modifier = Modifier.height(5.dp))
-                        Text(
-                            text = "Streamlined verification for\na safer, healthier India.",
-                            fontSize = 11.5.sp,
-                            lineHeight = 14.sp,
-                            color = Color(0xFF5E7390)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-        }
-    }
-}
-
-/**
- * One submodule row: tinted background art (with its icon tile baked in, or drawn via [leadingIcon]),
- * title + code badge, description and a round chevron button.
- */
-@Composable
-private fun PortalSubmoduleCard(
-    title: String,
-    badgeText: String,
-    description: String,
-    bgDrawableId: Int,
-    bgAspect: Float,
-    tileCenterFrac: Float,
-    tileLeftFrac: Float,
-    bgZoom: Float,
-    accentColor: Color,
-    badgeBackground: Color,
-    shadowColor: Color,
-    leadingIcon: (@Composable BoxScope.(Dp) -> Unit)? = null,
-    onClick: () -> Unit
-) {
-    val shape = RoundedCornerShape(26.dp)
-
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(826f / 225f)
-            .shadow(6.dp, shape, ambientColor = shadowColor.copy(alpha = 0.25f), spotColor = shadowColor.copy(alpha = 0.25f))
-            .clip(shape)
-            .border(1.5.dp, Color.White.copy(alpha = 0.85f), shape)
-            .clickable { onClick() }
-    ) {
-        val cardW = maxWidth
-        val cardH = maxHeight
-
-        // Background art, zoomed around its icon tile so the tile matches the reference size
-        val imgH = cardW / bgAspect
-        val offsetY = (imgH * tileCenterFrac - cardH / 2).coerceIn(0.dp, (imgH - cardH).coerceAtLeast(0.dp))
-        Image(
-            painter = painterResource(id = bgDrawableId),
-            contentDescription = null,
-            contentScale = ContentScale.FillBounds,
-            modifier = Modifier
-                .requiredSize(cardW, imgH)
-                .offset(y = -offsetY)
-                .graphicsLayer {
-                    scaleX = bgZoom
-                    scaleY = bgZoom
-                    transformOrigin = TransformOrigin(tileLeftFrac, tileCenterFrac)
-                }
-        )
-
-        leadingIcon?.invoke(this, cardW)
-
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(start = cardW * 0.267f, end = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = title,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = (-0.3).sp,
-                        color = Color(0xFF0B1B33),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Surface(color = badgeBackground, shape = RoundedCornerShape(50)) {
-                        Text(
-                            text = badgeText,
-                            fontSize = 9.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = accentColor,
-                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                Text(
-                    text = description,
-                    fontSize = 12.sp,
-                    lineHeight = 14.5.sp,
-                    color = Color(0xFF6A7C98)
-                )
-            }
-
-            Spacer(modifier = Modifier.width(8.dp))
-
-            Box(
-                modifier = Modifier
-                    .size(32.dp)
-                    .shadow(3.dp, CircleShape, ambientColor = shadowColor.copy(alpha = 0.3f), spotColor = shadowColor.copy(alpha = 0.3f))
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.8f))
-                    .border(1.dp, Color.White, CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                ChevronIcon(color = accentColor, pointsLeft = false, modifier = Modifier.size(14.dp))
-            }
-        }
-    }
-}
-
-/**
- * Peach rounded tile with the BIS hallmark, positioned like the icon tiles baked into the other card backgrounds
- */
-@Composable
-private fun BoxScope.BisLogoTile(size: Dp) {
-    val tile = size * 0.187f
-    Box(
-        modifier = Modifier
-            .align(Alignment.CenterStart)
-            .padding(start = size * 0.039f)
-            .size(tile)
-            .clip(RoundedCornerShape(tile * 0.22f))
-            .background(
-                Brush.verticalGradient(listOf(Color(0xFFFDEBDD), Color(0xFFFBDCC8)))
-            )
-            .border(1.dp, Color.White.copy(alpha = 0.7f), RoundedCornerShape(tile * 0.22f)),
-        contentAlignment = Alignment.Center
-    ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val w = this.size.width
-            val h = this.size.height
-            val blue = Color(0xFF1645B5)
-            val red = Color(0xFFE02B2B)
-
-            val outer = Path().apply {
-                moveTo(w * 0.5f, h * 0.2f)
-                lineTo(w * 0.9f, h * 0.76f)
-                lineTo(w * 0.1f, h * 0.76f)
-                close()
-            }
-            drawPath(outer, blue)
-            drawPath(outer, blue, style = Stroke(width = w * 0.05f, join = StrokeJoin.Round))
-
-            val inner = Path().apply {
-                moveTo(w * 0.5f, h * 0.36f)
-                lineTo(w * 0.73f, h * 0.67f)
-                lineTo(w * 0.27f, h * 0.67f)
-                close()
-            }
-            drawPath(inner, Color(0xFFFDEBDD))
-            drawCircle(red, radius = w * 0.07f, center = Offset(w * 0.5f, h * 0.58f))
-            drawLine(
-                color = red,
-                start = Offset(w * 0.14f, h * 0.85f),
-                end = Offset(w * 0.86f, h * 0.85f),
-                strokeWidth = w * 0.03f,
-                cap = StrokeCap.Round
-            )
-        }
-    }
-}
-
-@Composable
-private fun ChevronIcon(color: Color, pointsLeft: Boolean, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val path = Path().apply {
-            if (pointsLeft) {
-                moveTo(w * 0.7f, h * 0.1f)
-                lineTo(w * 0.25f, h * 0.5f)
-                lineTo(w * 0.7f, h * 0.9f)
-            } else {
-                moveTo(w * 0.3f, h * 0.1f)
-                lineTo(w * 0.75f, h * 0.5f)
-                lineTo(w * 0.3f, h * 0.9f)
-            }
-        }
-        drawPath(
-            path = path,
-            color = color,
-            style = Stroke(width = w * 0.17f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        )
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun LegalMetrologyRoleScreen(
-    onNavigate: (AppScreen) -> Unit,
-    onBack: () -> Unit
-) {
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Legal Metrology", fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    TextButton(onClick = onBack) {
-                        Text("← Back", fontWeight = FontWeight.Bold, color = Color(0xFF0052B4))
-                    }
-                }
-            )
-        }
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Text(
-                text = "Select Authorized Role",
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = Color(0xFF475569)
-            )
-
-            PrimaryPortalCard(
-                title = "Role A: Inspector",
-                description = "Assigned inspections, OCR verification, and physical/manual inspection recording.",
-                badgeText = "Field Verification",
-                symbolText = "INSP",
-                accentColor = Color(0xFF0052B4),
-                onClick = { onNavigate(AppScreen.INSPECTOR_LOGIN) }
-            )
-
-            PrimaryPortalCard(
-                title = "Role B: Supreme Authority",
-                description = "Inspector monitoring, task oversight, physical inspection tracking, and analytics.",
-                badgeText = "Oversight & Admin",
-                symbolText = "AUTH",
-                accentColor = Color(0xFF2E9B3C),
-                onClick = { onNavigate(AppScreen.AUTHORITY_DASHBOARD) }
-            )
-        }
-    }
-}
-
-@Composable
-fun PrimaryPortalCard(
-    title: String,
-    description: String,
-    badgeText: String,
-    symbolText: String,
-    accentColor: Color,
-    onClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() },
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(20.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(56.dp)
-                    .clip(CircleShape)
-                    .background(accentColor.copy(alpha = 0.12f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = symbolText,
-                    color = accentColor,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.ExtraBold
-                )
-            }
-
-            Spacer(modifier = Modifier.width(16.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Surface(
-                    color = accentColor.copy(alpha = 0.1f),
-                    shape = RoundedCornerShape(6.dp)
-                ) {
-                    Text(
-                        text = badgeText,
-                        color = accentColor,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = title,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF071D36)
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = description,
-                    fontSize = 13.sp,
-                    color = Color(0xFF64748B),
-                    lineHeight = 18.sp
-                )
-            }
-
-            Spacer(modifier = Modifier.width(8.dp))
-
-            Text(
-                text = "→",
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF94A3B8)
-            )
         }
     }
 }
