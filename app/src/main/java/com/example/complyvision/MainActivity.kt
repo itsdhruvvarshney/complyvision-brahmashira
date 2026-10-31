@@ -27,14 +27,20 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -43,6 +49,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
@@ -286,8 +293,6 @@ fun rememberDrawableId(name: String): Int {
  */
 @Composable
 fun MainHomeScreen(onNavigate: (AppScreen) -> Unit) {
-    var selectedBottomTab by remember { mutableIntStateOf(0) }
-
     val heroBgId = rememberDrawableId("hero_banner_bg")
     val consumerBgId = rememberDrawableId("card_consumer_bg")
     val businessBgId = rememberDrawableId("card_business_bg")
@@ -308,7 +313,7 @@ fun MainHomeScreen(onNavigate: (AppScreen) -> Unit) {
                 .fillMaxSize()
                 .statusBarsPadding()
                 .verticalScroll(rememberScrollState())
-                .padding(bottom = 96.dp)
+                .navigationBarsPadding()
         ) {
             // 1. TOP BAR: Logo + Brand Title + Notification Bell with Red Dot
             Row(
@@ -742,50 +747,6 @@ fun MainHomeScreen(onNavigate: (AppScreen) -> Unit) {
 
             Spacer(modifier = Modifier.height(12.dp))
         }
-
-        // 7. BOTTOM NAVIGATION BAR (Home, History, Resources, Profile)
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.BottomCenter),
-            color = Color.White,
-            shadowElevation = 18.dp,
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceAround,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                BottomBarTab(
-                    label = "Home",
-                    iconType = 0,
-                    selected = selectedBottomTab == 0,
-                    onClick = { selectedBottomTab = 0 }
-                )
-                BottomBarTab(
-                    label = "History",
-                    iconType = 1,
-                    selected = selectedBottomTab == 1,
-                    onClick = { selectedBottomTab = 1 }
-                )
-                BottomBarTab(
-                    label = "Resources",
-                    iconType = 2,
-                    selected = selectedBottomTab == 2,
-                    onClick = { selectedBottomTab = 2 }
-                )
-                BottomBarTab(
-                    label = "Profile",
-                    iconType = 3,
-                    selected = selectedBottomTab == 3,
-                    onClick = { selectedBottomTab = 3 }
-                )
-            }
-        }
     }
 }
 
@@ -945,41 +906,6 @@ fun ChooseModeCard(
     }
 }
 
-@Composable
-fun BottomBarTab(
-    label: String,
-    iconType: Int,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    val activeColor = Color(0xFF0052B4)
-    val inactiveColor = Color(0xFF475569)
-
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(20.dp))
-            .background(if (selected) Color(0xFFDCEBFA) else Color.Transparent)
-            .clickable { onClick() }
-            .padding(horizontal = 18.dp, vertical = 6.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            BottomNavVectorIcon(
-                iconType = iconType,
-                tint = if (selected) activeColor else inactiveColor,
-                modifier = Modifier.size(22.dp)
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = label,
-                fontSize = 10.5.sp,
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                color = if (selected) activeColor else inactiveColor
-            )
-        }
-    }
-}
-
 // ============================================================================
 // CUSTOM VECTOR ICONS (Zero external library dependencies -> Zero compile errors)
 // ============================================================================
@@ -1133,123 +1059,465 @@ fun StatVectorIcon(iconType: Int, modifier: Modifier = Modifier) {
     }
 }
 
-@Composable
-fun BottomNavVectorIcon(iconType: Int, tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val stroke = Stroke(width = w * 0.09f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        when (iconType) {
-            0 -> { // Home Icon
-                val path = Path().apply {
-                    moveTo(w * 0.15f, h * 0.48f)
-                    lineTo(w * 0.5f, h * 0.16f)
-                    lineTo(w * 0.85f, h * 0.48f)
-                    lineTo(w * 0.75f, h * 0.48f)
-                    lineTo(w * 0.75f, h * 0.84f)
-                    lineTo(w * 0.25f, h * 0.84f)
-                    lineTo(w * 0.25f, h * 0.48f)
-                    close()
-                }
-                drawPath(path, tint)
-            }
-            1 -> { // History Clock Icon
-                drawCircle(tint, radius = w * 0.36f, center = Offset(w * 0.5f, h * 0.5f), style = stroke)
-                drawLine(tint, Offset(w * 0.5f, h * 0.5f), Offset(w * 0.5f, h * 0.3f), strokeWidth = w * 0.09f, cap = StrokeCap.Round)
-                drawLine(tint, Offset(w * 0.5f, h * 0.5f), Offset(w * 0.66f, h * 0.5f), strokeWidth = w * 0.09f, cap = StrokeCap.Round)
-            }
-            2 -> { // Resources Document Icon
-                drawRoundRect(
-                    color = tint,
-                    topLeft = Offset(w * 0.22f, h * 0.16f),
-                    size = Size(w * 0.56f, h * 0.68f),
-                    cornerRadius = CornerRadius(4f, 4f),
-                    style = stroke
-                )
-                drawLine(tint, Offset(w * 0.35f, h * 0.38f), Offset(w * 0.65f, h * 0.38f), strokeWidth = w * 0.08f, cap = StrokeCap.Round)
-                drawLine(tint, Offset(w * 0.35f, h * 0.54f), Offset(w * 0.65f, h * 0.54f), strokeWidth = w * 0.08f, cap = StrokeCap.Round)
-            }
-            else -> { // Profile User Icon
-                drawCircle(tint, radius = w * 0.38f, center = Offset(w * 0.5f, h * 0.5f), style = stroke)
-                drawCircle(tint, radius = w * 0.13f, center = Offset(w * 0.5f, h * 0.38f), style = stroke)
-                drawArc(
-                    color = tint,
-                    startAngle = 200f,
-                    sweepAngle = 140f,
-                    useCenter = false,
-                    topLeft = Offset(w * 0.26f, h * 0.56f),
-                    size = Size(w * 0.48f, h * 0.32f),
-                    style = stroke
-                )
-            }
-        }
-    }
-}
-
 // ============================================================================
 // EXISTING SUBMODULE SCREENS (Preserved 100% intact)
 // ============================================================================
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Business Portal screen matching the reference mockup (hero, three submodule cards, footer banner)
+ */
 @Composable
 fun BusinessPortalHomeScreen(
     onNavigate: (AppScreen) -> Unit,
     onBack: () -> Unit
 ) {
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Business Portal", fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    TextButton(onClick = onBack) {
-                        Text("← Back", fontWeight = FontWeight.Bold, color = Color(0xFF0052B4))
-                    }
-                }
+    val pageTop = Color(0xFFEEF5FD)
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(pageTop, Color(0xFFEAF2FC), Color(0xFFF6F9FD))
+                )
             )
-        }
-    ) { innerPadding ->
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-                .padding(20.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .verticalScroll(rememberScrollState())
+                .navigationBarsPadding()
         ) {
-            Text(
-                text = "Select Verification Submodule",
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = Color(0xFF475569)
-            )
+            // 1. HERO: background art + back button + logo + title
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1536f / 1024f)
+            ) {
+                Image(
+                    painter = painterResource(id = R.drawable.business_hero_bg),
+                    contentDescription = null,
+                    contentScale = ContentScale.FillBounds,
+                    modifier = Modifier.fillMaxSize()
+                )
 
-            PrimaryPortalCard(
-                title = "1. Legal Metrology",
-                description = "Verification of packaged commodity declarations and inspection workflows.",
-                badgeText = "Inspector & Authority",
-                symbolText = "LM",
-                accentColor = Color(0xFF0052B4),
-                onClick = { onNavigate(AppScreen.LM_ROLE_SELECTION) }
-            )
+                // Soft fade so the hero blends into the page background
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(36.dp)
+                        .align(Alignment.BottomCenter)
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(Color.Transparent, pageTop.copy(alpha = 0.9f))
+                            )
+                        )
+                )
 
-            PrimaryPortalCard(
-                title = "2. Pre-FSSAI Verification",
-                description = "Preliminary verification module related to food product labeling and FSSAI requirements.",
-                badgeText = "Food Compliance",
-                symbolText = "FSSAI",
-                accentColor = Color(0xFF2E9B3C),
-                onClick = { onNavigate(AppScreen.PRE_FSSAI_HOME) }
-            )
+                // Header: round back button + centered brand logo
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 16.dp)
+                        .padding(top = 10.dp)
+                        .height(42.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .size(40.dp)
+                            .shadow(4.dp, CircleShape, ambientColor = Color(0x330052B4), spotColor = Color(0x330052B4))
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.85f))
+                            .border(1.dp, Color.White, CircleShape)
+                            .clickable { onBack() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        ChevronIcon(
+                            color = Color(0xFF071D36),
+                            pointsLeft = true,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
 
-            PrimaryPortalCard(
-                title = "3. BIS Verification",
-                description = "Preliminary verification module for applicable Bureau of Indian Standards requirements.",
-                badgeText = "Standards Check",
-                symbolText = "BIS",
-                accentColor = Color(0xFF6A1B9A),
-                onClick = { onNavigate(AppScreen.BIS_VERIFICATION_HOME) }
+                    Row(
+                        modifier = Modifier.align(Alignment.Center),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // The logo JPEG has a white backdrop; multiply keeps only the artwork
+                        val logo = ImageBitmap.imageResource(id = R.drawable.complyvision_logo)
+                        Canvas(modifier = Modifier.size(44.dp)) {
+                            drawImage(
+                                image = logo,
+                                dstSize = IntSize(size.width.toInt(), size.height.toInt()),
+                                filterQuality = FilterQuality.High,
+                                blendMode = BlendMode.Multiply
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(4.dp))
+
+                        Box {
+                            Text(
+                                text = buildAnnotatedString {
+                                    withStyle(
+                                        SpanStyle(
+                                            color = Color(0xFF071D36),
+                                            fontWeight = FontWeight.ExtraBold
+                                        )
+                                    ) {
+                                        append("Comply")
+                                    }
+                                    withStyle(
+                                        SpanStyle(
+                                            color = Color(0xFF0052B4),
+                                            fontWeight = FontWeight.ExtraBold
+                                        )
+                                    ) {
+                                        append("Vision")
+                                    }
+                                },
+                                fontSize = 22.sp,
+                                letterSpacing = (-0.5).sp
+                            )
+                            // Green leaf accent above the second 'i' in Vision
+                            Canvas(
+                                modifier = Modifier
+                                    .offset(x = 113.dp, y = (-1).dp)
+                                    .size(9.dp)
+                            ) {
+                                val path = Path().apply {
+                                    moveTo(0f, size.height)
+                                    lineTo(size.width * 0.3f, 0f)
+                                    lineTo(size.width, 0f)
+                                    lineTo(size.width * 0.7f, size.height)
+                                    close()
+                                }
+                                drawPath(path = path, color = Color(0xFF4CAF50))
+                            }
+                        }
+                    }
+                }
+
+                // Title + subtitle
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(start = 22.dp, top = 108.dp)
+                ) {
+                    Text(
+                        text = buildAnnotatedString {
+                            withStyle(SpanStyle(color = Color(0xFF050B18))) {
+                                append("Business\n")
+                            }
+                            withStyle(SpanStyle(color = Color(0xFF0A63F0))) {
+                                append("Portal")
+                            }
+                        },
+                        fontSize = 37.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        lineHeight = 37.sp,
+                        letterSpacing = (-1).sp
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = "Compliance solutions for\nmanufacturers, importers,\nretailers and regulatory teams.",
+                        fontSize = 13.sp,
+                        lineHeight = 16.sp,
+                        color = Color(0xFF566A85)
+                    )
+                }
+            }
+
+            // 2. SUBMODULE CARDS
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                PortalSubmoduleCard(
+                    title = "Legal Metrology",
+                    badgeText = "LM",
+                    description = "Verify packaged commodity\ndeclarations as per Legal\nMetrology standards.",
+                    bgDrawableId = R.drawable.card_lm_bg,
+                    bgAspect = 1600f / 535f,
+                    tileCenterFrac = 0.407f,
+                    tileLeftFrac = 0.039f,
+                    bgZoom = 1.28f,
+                    accentColor = Color(0xFF1D4ED8),
+                    badgeBackground = Color(0xFFD6E7FF),
+                    shadowColor = Color(0xFF2F6FE0),
+                    onClick = { onNavigate(AppScreen.LM_ROLE_SELECTION) }
+                )
+
+                PortalSubmoduleCard(
+                    title = "Pre-FSSAI Verification",
+                    badgeText = "FSSAI",
+                    description = "Check food product compliance\nbefore FSSAI application.",
+                    bgDrawableId = R.drawable.card_fssai_bg,
+                    bgAspect = 1600f / 534f,
+                    tileCenterFrac = 0.481f,
+                    tileLeftFrac = 0.0375f,
+                    bgZoom = 1.07f,
+                    accentColor = Color(0xFF1E7E45),
+                    badgeBackground = Color(0xFFCFF1DB),
+                    shadowColor = Color(0xFF2E9B5C),
+                    onClick = { onNavigate(AppScreen.PRE_FSSAI_HOME) }
+                )
+
+                PortalSubmoduleCard(
+                    title = "BIS Verification",
+                    badgeText = "BIS",
+                    description = "Verify BIS certification and\nstandards compliance.",
+                    bgDrawableId = R.drawable.card_bis_bg,
+                    bgAspect = 1600f / 533f,
+                    tileCenterFrac = 0.5f,
+                    tileLeftFrac = 0f,
+                    bgZoom = 1f,
+                    accentColor = Color(0xFFEA580C),
+                    badgeBackground = Color(0xFFFFE0CC),
+                    shadowColor = Color(0xFFE59A5E),
+                    leadingIcon = { size -> BisLogoTile(size = size) },
+                    onClick = { onNavigate(AppScreen.BIS_VERIFICATION_HOME) }
+                )
+
+                // 3. FOOTER BANNER
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(386f / 101f)
+                        .shadow(
+                            6.dp,
+                            RoundedCornerShape(24.dp),
+                            ambientColor = Color(0x331E5FB0),
+                            spotColor = Color(0x331E5FB0)
+                        )
+                        .clip(RoundedCornerShape(24.dp))
+                        .border(1.dp, Color.White.copy(alpha = 0.8f), RoundedCornerShape(24.dp))
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.business_footer_bg),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        alignment = Alignment.BottomEnd,
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .padding(start = 20.dp)
+                    ) {
+                        Text(
+                            text = "Ensure Compliance.\nBuild Consumer Trust.",
+                            fontSize = 15.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            lineHeight = 18.sp,
+                            color = Color(0xFF050B18)
+                        )
+                        Spacer(modifier = Modifier.height(5.dp))
+                        Text(
+                            text = "Streamlined verification for\na safer, healthier India.",
+                            fontSize = 11.5.sp,
+                            lineHeight = 14.sp,
+                            color = Color(0xFF5E7390)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+        }
+    }
+}
+
+/**
+ * One submodule row: tinted background art (with its icon tile baked in, or drawn via [leadingIcon]),
+ * title + code badge, description and a round chevron button.
+ */
+@Composable
+private fun PortalSubmoduleCard(
+    title: String,
+    badgeText: String,
+    description: String,
+    bgDrawableId: Int,
+    bgAspect: Float,
+    tileCenterFrac: Float,
+    tileLeftFrac: Float,
+    bgZoom: Float,
+    accentColor: Color,
+    badgeBackground: Color,
+    shadowColor: Color,
+    leadingIcon: (@Composable BoxScope.(Dp) -> Unit)? = null,
+    onClick: () -> Unit
+) {
+    val shape = RoundedCornerShape(26.dp)
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(826f / 225f)
+            .shadow(6.dp, shape, ambientColor = shadowColor.copy(alpha = 0.25f), spotColor = shadowColor.copy(alpha = 0.25f))
+            .clip(shape)
+            .border(1.5.dp, Color.White.copy(alpha = 0.85f), shape)
+            .clickable { onClick() }
+    ) {
+        val cardW = maxWidth
+        val cardH = maxHeight
+
+        // Background art, zoomed around its icon tile so the tile matches the reference size
+        val imgH = cardW / bgAspect
+        val offsetY = (imgH * tileCenterFrac - cardH / 2).coerceIn(0.dp, (imgH - cardH).coerceAtLeast(0.dp))
+        Image(
+            painter = painterResource(id = bgDrawableId),
+            contentDescription = null,
+            contentScale = ContentScale.FillBounds,
+            modifier = Modifier
+                .requiredSize(cardW, imgH)
+                .offset(y = -offsetY)
+                .graphicsLayer {
+                    scaleX = bgZoom
+                    scaleY = bgZoom
+                    transformOrigin = TransformOrigin(tileLeftFrac, tileCenterFrac)
+                }
+        )
+
+        leadingIcon?.invoke(this, cardW)
+
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(start = cardW * 0.267f, end = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = title,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = (-0.3).sp,
+                        color = Color(0xFF0B1B33),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Surface(color = badgeBackground, shape = RoundedCornerShape(50)) {
+                        Text(
+                            text = badgeText,
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = accentColor,
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = description,
+                    fontSize = 12.sp,
+                    lineHeight = 14.5.sp,
+                    color = Color(0xFF6A7C98)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .shadow(3.dp, CircleShape, ambientColor = shadowColor.copy(alpha = 0.3f), spotColor = shadowColor.copy(alpha = 0.3f))
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.8f))
+                    .border(1.dp, Color.White, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                ChevronIcon(color = accentColor, pointsLeft = false, modifier = Modifier.size(14.dp))
+            }
+        }
+    }
+}
+
+/**
+ * Peach rounded tile with the BIS hallmark, positioned like the icon tiles baked into the other card backgrounds
+ */
+@Composable
+private fun BoxScope.BisLogoTile(size: Dp) {
+    val tile = size * 0.187f
+    Box(
+        modifier = Modifier
+            .align(Alignment.CenterStart)
+            .padding(start = size * 0.039f)
+            .size(tile)
+            .clip(RoundedCornerShape(tile * 0.22f))
+            .background(
+                Brush.verticalGradient(listOf(Color(0xFFFDEBDD), Color(0xFFFBDCC8)))
+            )
+            .border(1.dp, Color.White.copy(alpha = 0.7f), RoundedCornerShape(tile * 0.22f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val w = this.size.width
+            val h = this.size.height
+            val blue = Color(0xFF1645B5)
+            val red = Color(0xFFE02B2B)
+
+            val outer = Path().apply {
+                moveTo(w * 0.5f, h * 0.2f)
+                lineTo(w * 0.9f, h * 0.76f)
+                lineTo(w * 0.1f, h * 0.76f)
+                close()
+            }
+            drawPath(outer, blue)
+            drawPath(outer, blue, style = Stroke(width = w * 0.05f, join = StrokeJoin.Round))
+
+            val inner = Path().apply {
+                moveTo(w * 0.5f, h * 0.36f)
+                lineTo(w * 0.73f, h * 0.67f)
+                lineTo(w * 0.27f, h * 0.67f)
+                close()
+            }
+            drawPath(inner, Color(0xFFFDEBDD))
+            drawCircle(red, radius = w * 0.07f, center = Offset(w * 0.5f, h * 0.58f))
+            drawLine(
+                color = red,
+                start = Offset(w * 0.14f, h * 0.85f),
+                end = Offset(w * 0.86f, h * 0.85f),
+                strokeWidth = w * 0.03f,
+                cap = StrokeCap.Round
             )
         }
+    }
+}
+
+@Composable
+private fun ChevronIcon(color: Color, pointsLeft: Boolean, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val path = Path().apply {
+            if (pointsLeft) {
+                moveTo(w * 0.7f, h * 0.1f)
+                lineTo(w * 0.25f, h * 0.5f)
+                lineTo(w * 0.7f, h * 0.9f)
+            } else {
+                moveTo(w * 0.3f, h * 0.1f)
+                lineTo(w * 0.75f, h * 0.5f)
+                lineTo(w * 0.3f, h * 0.9f)
+            }
+        }
+        drawPath(
+            path = path,
+            color = color,
+            style = Stroke(width = w * 0.17f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        )
     }
 }
 
