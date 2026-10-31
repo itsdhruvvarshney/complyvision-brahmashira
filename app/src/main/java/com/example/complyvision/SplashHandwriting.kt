@@ -1,5 +1,4 @@
 package com.example.complyvision
-
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
@@ -205,10 +204,13 @@ fun AnimatedSplashScreen(onSplashFinished: () -> Unit) {
         startLogoAnim = true
         delay(650)
 
-        // 2. "ComplyVision" is written by hand
+        // 2. "ComplyVision" is drawn fluidly by hand (Update this block)
         handwriting.animateTo(
             targetValue = 1f,
-            animationSpec = tween(durationMillis = 2600, easing = CubicBezierEasing(0.4f, 0f, 0.6f, 1f))
+            animationSpec = tween(
+                durationMillis = 3500, // Duration badhaya taaki stroke drawing saaf dikhe
+                easing = FastOutSlowInEasing // Easing change kiya for smoother ink flow
+            )
         )
         delay(250)
 
