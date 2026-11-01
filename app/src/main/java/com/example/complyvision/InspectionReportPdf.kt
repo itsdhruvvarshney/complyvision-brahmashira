@@ -244,10 +244,10 @@ object InspectionReportPdf {
         }
     }
 
-    private fun cover(w: W, title: String, subtitle: String, code: String, verdict: String?) {
+    private fun cover(w: W, title: String, subtitle: String, code: String, verdict: String?, tag: String = "Legal Metrology") {
         val c = w.c
         c.drawRoundRect(RectF(M, w.y, PAGE_W - M, w.y + 92f), 14f, 14f, fill(NAVY))
-        c.drawText("ComplyVision  •  Legal Metrology", M + 18f, w.y + 26f, p(9.5f, Color.parseColor("#9CC4FF"), bold = true))
+        c.drawText("ComplyVision  •  $tag", M + 18f, w.y + 26f, p(9.5f, Color.parseColor("#9CC4FF"), bold = true))
         c.drawText(title, M + 18f, w.y + 52f, p(19f, Color.WHITE, bold = true))
         c.drawText(subtitle, M + 18f, w.y + 72f, p(9.5f, Color.parseColor("#CFE0FA")))
         c.drawText(code, PAGE_W - M - 18f, w.y + 26f, p(10f, Color.WHITE, bold = true, align = Paint.Align.RIGHT))
@@ -528,14 +528,21 @@ object InspectionReportPdf {
         }
     }
 
-    fun writePackage(case: MyCase?, summary: ScanSummary?, r: PackageReport, inspector: OfficerSession, out: OutputStream) {
+    fun writePackage(
+        case: MyCase?, summary: ScanSummary?, r: PackageReport, inspector: OfficerSession, out: OutputStream,
+        heading: PdfHeading? = null
+    ) {
         val generated = Instant.now().atZone(ZoneId.systemDefault()).format(stamp)
         val doc = PdfDocument()
         try {
             val code = summary?.scanCode ?: r.reportId.take(8)
             val w = W(doc, "ComplyVision  |  Package $code  |  ${inspector.name} (${inspector.officerId})  |  Generated $generated")
             w.newPage()
-            cover(w, "Package Compliance Report", case?.let { "${it.product} • ${it.code}" } ?: "Package analysis", code, r.verdictLabel)
+            cover(
+                w, heading?.title ?: "Package Compliance Report",
+                heading?.subtitle ?: case?.let { "${it.product} • ${it.code}" } ?: "Package analysis",
+                code, r.verdictLabel, heading?.tag ?: "Legal Metrology"
+            )
             if (case != null) {
                 section(w, "Inspection")
                 caseDetails(w, case, OfficerRef(inspector.name, inspector.officerId, inspector.office, inspector.designation))
@@ -558,3 +565,6 @@ object InspectionReportPdf {
         }
     }
 }
+
+/** Overrides the cover of a package PDF (BIS / Pre-FSSAI verification reports) */
+data class PdfHeading(val tag: String, val title: String, val subtitle: String)

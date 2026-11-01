@@ -137,6 +137,11 @@ fun PackageReportContent(
 
         report.classification?.let { ClassificationCard(it, onChangeCategory) }
 
+        val photoNames = remember(report) { report.raw.optJSONArray("photos").jsonObjects().map { it.str("label") } }
+        report.raw.optJSONObject("intelligence")?.let { ProductIntelligenceSection(it, photoNames) }
+        report.raw.optJSONObject("compliance_review")?.let { ComplianceReviewSection(it, report.raw.str("mode") == "org") }
+        report.raw.optJSONObject("gemini_audit")?.let { GeminiAuditLine(it, photoNames.size) }
+
         val pending = report.reviewRules
         if (onResolve != null && pending.isNotEmpty()) ReviewResolutionCard(pending, resolving, onResolve)
 
@@ -154,13 +159,13 @@ fun PackageReportContent(
 
         if (report.declarations.isNotEmpty()) {
             GlassCard(padding = 14.dp) {
-                SectionHeader(AIcon.DOC, "Extracted declarations", "Read by PaddleOCR and parsed into Legal Metrology fields")
+                SectionHeader(AIcon.DOC, "Extracted declarations", "Read by PaddleOCR and parsed into label declaration fields")
                 Spacer(Modifier.height(8.dp))
                 KeyValueTable(report.declarations)
             }
         }
 
-        if (report.measurements.isNotEmpty() || report.calibration.isNotBlank()) {
+        if ((report.measurements.isNotEmpty() || report.calibration.isNotBlank()) && report.raw.str("mode") != "consumer") {
             GlassCard(padding = 14.dp) {
                 SectionHeader(AIcon.SORT, "Measurements", "ArUco scale calibration, numeral glyph height and local contrast")
                 Spacer(Modifier.height(8.dp))
@@ -214,7 +219,7 @@ internal fun DataImage(uri: String, modifier: Modifier, maxSide: Int = 800, scal
 }
 
 @Composable
-private fun SectionHeader(icon: AIcon, title: String, subtitle: String? = null) {
+internal fun SectionHeader(icon: AIcon, title: String, subtitle: String? = null) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(28.dp).clip(RoundedCornerShape(9.dp)).background(AC.BlueSoft), contentAlignment = Alignment.Center) {
             AIconView(icon, AC.Blue, Modifier.size(16.dp))
@@ -318,11 +323,21 @@ private fun RuleRow(rule: RuleResult, evidence: Map<String, EvidenceItem>, onZoo
             Text(rule.id, color = AC.Blue, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.width(44.dp))
             Text(rule.title, color = AC.Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp, modifier = Modifier.weight(1f))
             Spacer(Modifier.width(6.dp))
+            if (rule.aiVerified) { Pill("AI verified", AC.Violet, AC.VioletSoft, size = 9); Spacer(Modifier.width(4.dp)) }
+            else if (rule.manualReview) { Pill("Check manually", AC.Amber, AC.AmberSoft, size = 9); Spacer(Modifier.width(4.dp)) }
             Pill(ruleLabel(rule.status), fg, bg, size = 10)
         }
         if (open) {
             Spacer(Modifier.height(6.dp))
             Text(rule.reason, color = AC.Ink, fontSize = 12.5.sp, lineHeight = 17.sp)
+            if (rule.aiVerified) {
+                Text("The text reader first reported ${ruleLabel(rule.originalStatus)}. AI read the label again and found the declaration" +
+                    (rule.geminiEvidence.takeIf { it.isNotBlank() }?.let { ": \"$it\"" } ?: "."),
+                    color = AC.Violet, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 15.sp, modifier = Modifier.padding(top = 6.dp))
+            } else if (rule.geminiOpinion.isNotBlank() && rule.geminiNote.isNotBlank()) {
+                Text("AI second look: ${rule.geminiNote}", color = if (rule.manualReview) AC.Amber else AC.Muted, fontSize = 11.5.sp,
+                    fontWeight = FontWeight.SemiBold, lineHeight = 15.sp, modifier = Modifier.padding(top = 6.dp))
+            }
             if (rule.found.isNotBlank() || rule.expected.isNotBlank()) {
                 Spacer(Modifier.height(6.dp))
                 Row {

@@ -71,13 +71,13 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private val CBlue = Color(0xFF0A63F0)
-private val CNavy = Color(0xFF071D36)
-private val CMuted = Color(0xFF566A85)
-private val CBorder = Color(0xFFDCE7F5)
-private val CHint = Color(0xFF7487A6)
-private val CRed = Color(0xFFD93A3A)
-private val CGreen = Color(0xFF2E9B3C)
+internal val CBlue = Color(0xFF0A63F0)
+internal val CNavy = Color(0xFF071D36)
+internal val CMuted = Color(0xFF566A85)
+internal val CBorder = Color(0xFFDCE7F5)
+internal val CHint = Color(0xFF7487A6)
+internal val CRed = Color(0xFFD93A3A)
+internal val CGreen = Color(0xFF2E9B3C)
 
 private enum class AuthMode { LOGIN, REGISTER }
 
@@ -363,7 +363,7 @@ fun ConsumerAuthScreen(onBack: () -> Unit, onAuthenticated: (ConsumerSession) ->
 
 /** Fades and lifts its content in once, [index] steps after the screen opens */
 @Composable
-private fun Staggered(index: Int, content: @Composable () -> Unit) {
+internal fun Staggered(index: Int, content: @Composable () -> Unit) {
     val progress = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
         delay(60L + index * 90L)
@@ -449,7 +449,7 @@ private fun AuthModeSwitch(mode: AuthMode, enabled: Boolean, onSelect: (AuthMode
 }
 
 @Composable
-private fun AuthField(
+internal fun AuthField(
     value: String,
     onChange: (String) -> Unit,
     label: String?,
@@ -543,7 +543,7 @@ private fun PasswordMeter(password: String) {
 }
 
 @Composable
-private fun ErrorBanner(message: String) {
+internal fun ErrorBanner(message: String) {
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color(0xFFFDECEC))
             .border(1.dp, Color(0xFFF4C1C1), RoundedCornerShape(14.dp)).padding(horizontal = 12.dp, vertical = 10.dp)
@@ -557,7 +557,10 @@ private fun ErrorBanner(message: String) {
 }
 
 @Composable
-private fun GradientButton(label: String, loadingLabel: String, loading: Boolean, cooldownSeconds: Int, onClick: () -> Unit) {
+internal fun GradientButton(
+    label: String, loadingLabel: String, loading: Boolean, cooldownSeconds: Int, onClick: () -> Unit,
+    glyph: Glyph = Glyph.LOGIN, cooldownLabel: String = "Try again in"
+) {
     val blocked = cooldownSeconds > 0
     val source = remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
@@ -578,9 +581,9 @@ private fun GradientButton(label: String, loadingLabel: String, loading: Boolean
                     Spacer(Modifier.width(12.dp))
                     Text(loadingLabel, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 }
-                blocked -> Text("Try again in ${cooldownSeconds}s", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                blocked -> Text("$cooldownLabel ${cooldownSeconds}s", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
                 else -> {
-                    GlyphIcon(Glyph.LOGIN, Color.White, Modifier.size(24.dp))
+                    GlyphIcon(glyph, Color.White, Modifier.size(24.dp))
                     Spacer(Modifier.width(12.dp))
                     Text(label, color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
                 }

@@ -14,7 +14,9 @@ data class ScanTarget(
     val subtitle: String = code,
     val savedNote: String = "added to your inspection",
     /** The inspector's case, when scanning for one (its details go into the PDF) */
-    val inspection: MyCase? = null
+    val inspection: MyCase? = null,
+    /** Overrides the PDF cover (regulator-specific verifications) */
+    val pdfHeading: PdfHeading? = null
 )
 
 /** Where the scanner loads categories from and saves finished reports to; one implementation per portal */
@@ -25,6 +27,12 @@ interface ScanBackend {
 
     /** Only inspectors can settle REVIEW rules on the physical pack */
     val canResolve: Boolean get() = false
+
+    /** "fssai" / "bis" scopes the analysis and the category list to one regulator; null = Legal Metrology default */
+    val authority: String? get() = null
+
+    /** "consumer" | "inspector" | "org": decides what the analyzer asks Gemini and how much of its answer is applied */
+    val mode: String get() = "inspector"
     suspend fun resolveScan(scanCode: String, decisions: List<RuleDecision>): ActionResult =
         ActionResult.Rejected("Not available here.")
     suspend fun reloadScan(scanCode: String): Pair<ScanSummary, PackageReport>

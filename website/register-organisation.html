@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Register your Organisation | ComplyVision</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">Comply<span>Vision</span></div>
+  <span class="pill">Organisation Portal</span>
+  <h1>Organisation <b>Registration</b></h1>
+  <p class="lead">Register once on the website. You can then log in to the ComplyVision app with your Organisation ID to run BIS and Pre-FSSAI verifications.</p>
+
+  <form id="form" class="card" novalidate>
+    <h3 style="margin-top:0">Organisation</h3>
+    <div class="grid">
+      <div class="full"><label>Organisation name <i>*</i></label><input id="name" maxlength="120" autocomplete="organization"><div class="err" data-for="name"></div></div>
+      <div><label>Business type <i>*</i></label>
+        <select id="type"><option value="">Select</option><option>Manufacturer</option><option>Packer</option><option>Importer</option><option>Retailer</option><option>Distributor</option><option>Exporter</option></select>
+        <div class="err" data-for="type"></div></div>
+      <div><label>Industry / products</label><input id="industry" maxlength="120" placeholder="e.g. Packaged foods"></div>
+      <div><label>GSTIN</label><input id="gstin" maxlength="15" placeholder="15-character GSTIN" style="text-transform:uppercase"><div class="err" data-for="gstin"></div></div>
+      <div><label>FSSAI licence no.</label><input id="fssai" maxlength="14" inputmode="numeric" placeholder="14 digits"><div class="err" data-for="fssai"></div></div>
+      <div class="full"><label>BIS licence / CRS registration no.</label><input id="bis" maxlength="40"></div>
+    </div>
+
+    <h3>Address</h3>
+    <div class="grid">
+      <div class="full"><label>Registered address</label><textarea id="address" maxlength="200" autocomplete="street-address"></textarea></div>
+      <div><label>City</label><input id="city" maxlength="60" autocomplete="address-level2"></div>
+      <div><label>State</label><input id="state" maxlength="60" autocomplete="address-level1"></div>
+      <div><label>PIN code</label><input id="pin" maxlength="6" inputmode="numeric"><div class="err" data-for="pin"></div></div>
+    </div>
+
+    <h3>Authorised person</h3>
+    <div class="grid">
+      <div><label>Full name <i>*</i></label><input id="person" maxlength="80" autocomplete="name"><div class="err" data-for="person"></div></div>
+      <div><label>Designation</label><input id="designation" maxlength="80"></div>
+      <div><label>Email <i>*</i></label><input id="email" type="email" maxlength="120" autocomplete="email"><div class="err" data-for="email"></div></div>
+      <div><label>Mobile</label><input id="phone" maxlength="20" inputmode="tel" autocomplete="tel"></div>
+      <div><label>Password <i>*</i></label><input id="pw" type="password" maxlength="64" autocomplete="new-password" placeholder="8+ characters, letters and numbers"><div class="err" data-for="pw"></div></div>
+      <div><label>Confirm password <i>*</i></label><input id="pw2" type="password" maxlength="64" autocomplete="new-password"><div class="err" data-for="pw2"></div></div>
+    </div>
+
+    <div id="msg"></div>
+    <button id="go" type="submit">Register organisation</button>
+    <p class="note">Your Organisation ID is shown once registration succeeds. Log in on the app with the Organisation ID, organisation name, authorised person email and password.</p>
+  </form>
+
+  <div id="done" class="card" style="display:none;text-align:center">
+    <h1 style="font-size:28px">Registration <b>complete</b></h1>
+    <p class="lead">Your Organisation ID</p>
+    <div class="idbox" id="orgid"></div>
+    <p class="note">Save this ID. Open the ComplyVision app, choose <b>Organisation Pre-Verification</b> and log in with this ID, your organisation name, the email you registered and your password.</p>
+  </div>
+</div>
+<script src="config.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const val = (id) => $(id).value.trim();
+const errors = {};
+function setErr(k, m) { errors[k] = m; const e = document.querySelector(`[data-for="${k}"]`); if (e) e.textContent = m || ""; }
+const messages = {
+  bad_name: "Enter the organisation name.", bad_type: "Select the business type.", bad_person: "Enter the authorised person's name.",
+  bad_email: "Enter a valid email address.", bad_gstin: "GSTIN is not in a valid format.", bad_fssai: "FSSAI licence must be 14 digits.",
+  bad_pincode: "PIN code must be 6 digits.", bad_password: "Password needs 8+ characters with letters and numbers.",
+  email_taken: "An organisation is already registered with this email.", gstin_taken: "This GSTIN is already registered.",
+};
+
+function validate() {
+  setErr("name", val("name").length < 3 ? "Enter the organisation name" : "");
+  setErr("type", $("type").value ? "" : "Select the business type");
+  setErr("gstin", !val("gstin") || /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(val("gstin").toUpperCase()) ? "" : "Invalid GSTIN format");
+  setErr("fssai", !val("fssai") || /^[0-9]{14}$/.test(val("fssai")) ? "" : "FSSAI licence must be 14 digits");
+  setErr("pin", !val("pin") || /^[0-9]{6}$/.test(val("pin")) ? "" : "PIN code must be 6 digits");
+  setErr("person", val("person").length < 3 ? "Enter the authorised person's name" : "");
+  setErr("email", /^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(val("email")) ? "" : "Enter a valid email address");
+  const pw = $("pw").value;
+  setErr("pw", pw.length >= 8 && /[A-Za-z]/.test(pw) && /[0-9]/.test(pw) ? "" : "8+ characters with letters and numbers");
+  setErr("pw2", pw === $("pw2").value ? "" : "Passwords do not match");
+  return Object.values(errors).every((m) => !m);
+}
+
+$("form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  $("msg").innerHTML = "";
+  if (!validate()) return;
+  $("go").disabled = true; $("go").textContent = "Registering…";
+  try {
+    const r = await cvRpc("org_register", {
+      p_name: val("name"), p_business_type: $("type").value, p_industry: val("industry"), p_authorised_person: val("person"),
+      p_designation: val("designation"), p_email: val("email"), p_phone: val("phone"), p_gstin: val("gstin").toUpperCase(),
+      p_fssai_licence: val("fssai"), p_bis_licence: val("bis"), p_address: val("address"), p_city: val("city"),
+      p_state: val("state"), p_pincode: val("pin"), p_password: $("pw").value,
+    });
+    if (r.ok) { $("orgid").textContent = r.org_code; $("form").style.display = "none"; $("done").style.display = "block"; window.scrollTo(0, 0); return; }
+    $("msg").innerHTML = `<div class="banner bad">${messages[r.code] || "Registration failed. Please check the details."}</div>`;
+  } catch (e) {
+    $("msg").innerHTML = `<div class="banner bad">Could not reach the server. Please try again.</div>`;
+  } finally { $("go").disabled = false; $("go").textContent = "Register organisation"; }
+});
+</script>
+</body>
+</html>

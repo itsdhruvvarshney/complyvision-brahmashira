@@ -50,7 +50,7 @@ class Settings:
     api_keys: frozenset[str] = field(default_factory=lambda: frozenset(_list("ANALYZER_API_KEYS")))
     max_upload_mb: int = field(default_factory=lambda: _int("MAX_UPLOAD_MB", 10))
     workers: int = field(default_factory=lambda: max(1, _int("ANALYZER_WORKERS", 2)))
-    request_timeout_s: float = field(default_factory=lambda: _float("REQUEST_TIMEOUT_S", 170.0))
+    request_timeout_s: float = field(default_factory=lambda: _float("REQUEST_TIMEOUT_S", 300.0))
 
     # Request workspace
     workspace_root: str = field(default_factory=lambda: os.getenv(
@@ -94,10 +94,13 @@ class Settings:
             det, rec, ver = None, None, None
         return self.ocr_det_model or det, self.ocr_rec_model or rec, self.ocr_verify_model or ver
 
+    # Inspector (Legal Metrology) and organisation (BIS / Pre-FSSAI) checks pass at or above this compliance score (%)
+    pass_score_threshold: float = field(default_factory=lambda: _float("PASS_SCORE_THRESHOLD", 75.0))
+
     # Gemini (pool of keys, rotated round-robin with cool-down on quota / server errors)
     gemini_keys: list[str] = field(default_factory=lambda: _list("GEMINI_API_KEYS"))
-    gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
-    gemini_timeout_s: float = field(default_factory=lambda: _float("GEMINI_TIMEOUT_S", 30.0))
+    gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-3.5-flash,gemini-3-flash-preview"))
+    gemini_timeout_s: float = field(default_factory=lambda: _float("GEMINI_TIMEOUT_S", 45.0))
     gemini_enabled: bool = field(default_factory=lambda: _bool("GEMINI_ENABLED", True))
 
     @property

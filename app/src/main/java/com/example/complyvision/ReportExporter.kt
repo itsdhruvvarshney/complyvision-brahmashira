@@ -67,10 +67,10 @@ class ReportExporter internal constructor(
         return@prepare { out: OutputStream -> out.write(report.raw.toString(2).toByteArray(Charsets.UTF_8)) }
     }
 
-    fun packagePdf(case: MyCase?, summary: ScanSummary?, report: PackageReport) {
+    fun packagePdf(case: MyCase?, summary: ScanSummary?, report: PackageReport, heading: PdfHeading? = null) {
         val id = summary?.scanCode ?: report.reportId.take(8)
         prepare("pdf:$id", "Package report", "ComplyVision_${id}_${LocalDate.now()}.pdf", true) {
-            return@prepare { out: OutputStream -> InspectionReportPdf.writePackage(case, summary, report, store.session, out) }
+            return@prepare { out: OutputStream -> InspectionReportPdf.writePackage(case, summary, report, store.session, out, heading) }
         }
     }
 

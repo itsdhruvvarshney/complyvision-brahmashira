@@ -26,6 +26,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -75,11 +76,17 @@ import java.util.Locale
 private sealed interface ScanStage {
     data object Capture : ScanStage
     data object Checking : ScanStage
-    data class Ready(val image: ValidatedImage, val source: String) : ScanStage
-    data class Analyzing(val image: ValidatedImage, val source: String) : ScanStage
-    data class Done(val image: ValidatedImage, val source: String, val json: JSONObject, val report: PackageReport) : ScanStage
-    data class Failed(val message: String, val image: ValidatedImage?, val source: String, val retryable: Boolean) : ScanStage
+    data object Ready : ScanStage
+    data object Analyzing : ScanStage
+    data class Done(val source: String, val json: JSONObject, val report: PackageReport) : ScanStage
+    data class Failed(val message: String, val retryable: Boolean) : ScanStage
 }
+
+/** One photo of the product being checked; several can be analysed together */
+private data class ScanPhoto(val image: ValidatedImage, val source: String, val label: String)
+
+private val PhotoLabels = listOf("Front", "Back", "Side", "Document")
+private const val MAX_PHOTOS = 6
 
 private sealed interface SaveState {
     data object Saving : SaveState
@@ -110,22 +117,30 @@ private fun guideCrop(view: IntSize): (Int, Int) -> android.graphics.Rect = { w,
     android.graphics.Rect(left.toInt(), top.toInt(), (left + visW * gw).toInt(), (top + visH * gh).toInt())
 }
 
-/** The analyzer stages, in the order the FastAPI service runs them */
-private val AnalyzerStages = listOf(
-    "MIME & integrity validation",
-    "Image quality assessment",
-    "Perspective & tilt correction",
-    "ArUco scale calibration",
-    "Glare, exposure & contrast correction",
-    "PaddleOCR text recognition",
-    "Conditional OCR verification",
-    "Field extraction (MRP, net qty, dates…)",
-    "Numeral height & local contrast",
-    "Gemini enrichment",
-    "Product categorisation",
-    "Category rule engine (LM, FSS, BIS…)",
-    "Evidence crops & canonical report"
-)
+/** The analyzer stages, in the order the FastAPI service runs them (consumers skip the ArUco measurement) */
+private fun analyzerStages(consumer: Boolean, photos: Int, mode: String): List<String> = buildList {
+    add("MIME & integrity validation")
+    add("Image quality assessment")
+    add("Perspective & tilt correction")
+    if (!consumer) add("ArUco scale calibration")
+    add("Glare, exposure & contrast correction")
+    add("PaddleOCR text recognition")
+    if (photos > 1) add("Reading the other ${photos - 1} photo${if (photos > 2) "s" else ""}")
+    add("Conditional OCR verification")
+    add("Field extraction (MRP, net qty, dates…)")
+    if (!consumer) add("Numeral height & local contrast")
+    add("Gemini label reading (all photos)")
+    add("Product categorisation")
+    add("Category rule engine")
+    add("Evidence crops & canonical report")
+    add(
+        when (mode) {
+            "consumer" -> "Gemini re-check of failed rules + ingredient & claims analysis"
+            "org" -> "Gemini cross-verification & corrective recommendations"
+            else -> "Gemini cross-verification (rule engine stays final)"
+        }
+    )
+}
 
 private val PackageChoices = listOf(null to "Auto", "retail" to "Retail", "wholesale" to "Wholesale", "institutional" to "Institutional")
 
@@ -141,7 +156,10 @@ fun PackageScanScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val consumer = backend.mode == "consumer"
     var stage by remember { mutableStateOf<ScanStage>(if (startWithGallery) ScanStage.Checking else ScanStage.Capture) }
+    val photos = remember { mutableStateListOf<ScanPhoto>() }
+    var selected by remember { mutableIntStateOf(0) }
     var save by remember { mutableStateOf<SaveState?>(null) }
     var uploaded by remember { mutableFloatStateOf(0f) }
     var sessionCount by remember { mutableIntStateOf(0) }
@@ -155,7 +173,10 @@ fun PackageScanScreen(
     var awaitingConfirm by remember { mutableStateOf(false) }
     var resolving by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { backend.loadCategories() }
-    val panelArea = panelW.toDoubleOrNull()?.let { w -> panelH.toDoubleOrNull()?.let { h -> w * h } }?.takeIf { it in 1.0..20000.0 }
+    val panelArea = if (consumer) null else panelW.toDoubleOrNull()?.let { w -> panelH.toDoubleOrNull()?.let { h -> w * h } }?.takeIf { it in 1.0..20000.0 }
+
+    fun nextLabel() = PhotoLabels.getOrElse(photos.size) { "Other" }
+    fun backToReview() { stage = if (photos.isEmpty()) ScanStage.Capture else ScanStage.Ready }
 
     /** MIME-validates the original, then crops / resizes it on the phone before upload */
     fun accept(check: ImageCheck, source: String, crop: ((Int, Int) -> android.graphics.Rect)? = null) {
@@ -164,22 +185,44 @@ fun PackageScanScreen(
                 stage = ScanStage.Checking
                 scope.launch {
                     val ready = withContext(Dispatchers.Default) { ImageValidator.optimize(check.image, crop) }
-                    stage = ScanStage.Ready(ready, source)
+                    photos.add(ScanPhoto(ready, source, nextLabel()))
+                    selected = photos.lastIndex
+                    stage = ScanStage.Ready
                 }
             }
-            is ImageCheck.Invalid -> stage = ScanStage.Failed(check.message, null, source, retryable = false)
+            is ImageCheck.Invalid -> stage = ScanStage.Failed(check.message, retryable = false)
         }
     }
 
-    val gallery = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) {
+    val gallery = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MAX_PHOTOS)) { uris ->
+        if (uris.isNotEmpty()) {
             stage = ScanStage.Checking
-            scope.launch { accept(ImageValidator.validate(context, uri, "package"), "Gallery") }
+            scope.launch {
+                var failure: String? = null
+                for (uri in uris.take(MAX_PHOTOS - photos.size)) {
+                    when (val check = ImageValidator.validate(context, uri, "package")) {
+                        is ImageCheck.Valid -> {
+                            val ready = withContext(Dispatchers.Default) { ImageValidator.optimize(check.image, null) }
+                            photos.add(ScanPhoto(ready, "Gallery", nextLabel()))
+                        }
+                        is ImageCheck.Invalid -> failure = check.message
+                    }
+                }
+                selected = photos.lastIndex.coerceAtLeast(0)
+                if (photos.isEmpty()) stage = ScanStage.Failed(failure ?: "No photo could be read.", retryable = false)
+                else {
+                    stage = ScanStage.Ready
+                    if (failure != null) backend.showToast("Some photos were skipped: $failure", isError = true)
+                }
+            }
         } else if (stage == ScanStage.Checking) {
-            stage = ScanStage.Capture // the picker was dismissed without a photo
+            backToReview() // the picker was dismissed without a photo
         }
     }
-    fun pickFromGallery() = gallery.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    fun pickFromGallery() {
+        if (photos.size >= MAX_PHOTOS) backend.showToast("You can add up to $MAX_PHOTOS photos of one product.", isError = true)
+        else gallery.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    }
     LaunchedEffect(Unit) { if (startWithGallery) pickFromGallery() }
 
     fun persist(json: JSONObject, source: String) {
@@ -195,43 +238,51 @@ fun PackageScanScreen(
         }
     }
 
-    fun analyse(image: ValidatedImage, source: String) {
-        stage = ScanStage.Analyzing(image, source)
+    fun analyse() {
+        if (photos.isEmpty()) return
+        stage = ScanStage.Analyzing
         uploaded = 0f
         save = null
         awaitingConfirm = false
+        val images = photos.map { it.image }
+        val source = photos.first().source
+        val labels = photos.joinToString(",") { it.label.lowercase(Locale.ENGLISH) }
         scope.launch {
             try {
                 val json = AnalyzerClient.analyze(
-                    image,
+                    images,
                     mapOf(
                         "case_code" to case.inspection?.code,
-                        "product_name" to case.product,
+                        "product_name" to case.product.takeIf { case.inspection != null },
                         "brand" to case.brand,
                         "category" to case.category,
                         "declared_mrp" to case.mrp?.let { String.format(Locale.US, "%.2f", it) },
                         "source" to source,
                         "category_id" to categoryChoice,
                         "package_type" to packageChoice,
-                        "pdp_area_cm2" to panelArea?.let { String.format(Locale.US, "%.1f", it) }
+                        "pdp_area_cm2" to panelArea?.let { String.format(Locale.US, "%.1f", it) },
+                        "authority" to backend.authority,
+                        "mode" to backend.mode,
+                        "photo_labels" to labels
                     )
                 ) { uploaded = it }
                 val report = withContext(Dispatchers.Default) { PackageReport.parse(json) }
-                stage = ScanStage.Done(image, source, json, report)
-                // A low-confidence category would apply the wrong standards: hold the save until the inspector confirms
+                stage = ScanStage.Done(source, json, report)
+                // A low-confidence category would apply the wrong standards: hold the save until the user confirms
                 if (report.classification?.needsConfirmation == true) awaitingConfirm = true else persist(json, source)
             } catch (e: AnalyzerException) {
-                stage = ScanStage.Failed(e.message ?: "Analysis failed.", image, source,
+                stage = ScanStage.Failed(e.message ?: "Analysis failed.",
                     retryable = e.failure != AnalyzerFailure.REJECTED && e.failure != AnalyzerFailure.NOT_CONFIGURED)
             }
         }
     }
 
     BackHandler {
-        when (val s = stage) {
+        when (stage) {
             is ScanStage.Analyzing, ScanStage.Checking -> Unit // let the request finish
-            is ScanStage.Ready -> stage = ScanStage.Capture
-            is ScanStage.Failed -> stage = if (s.image != null) ScanStage.Ready(s.image, s.source) else ScanStage.Capture
+            ScanStage.Ready -> if (photos.isNotEmpty()) stage = ScanStage.Capture else onClose()
+            ScanStage.Capture -> if (photos.isNotEmpty()) stage = ScanStage.Ready else onClose()
+            is ScanStage.Failed -> backToReview()
             else -> onClose()
         }
     }
@@ -241,6 +292,8 @@ fun PackageScanScreen(
             ScanStage.Capture -> CaptureView(
                 case = case,
                 sessionCount = sessionCount,
+                photoCount = photos.size,
+                consumer = consumer,
                 onCaptured = { bytes, view ->
                     stage = ScanStage.Checking
                     scope.launch {
@@ -248,34 +301,44 @@ fun PackageScanScreen(
                         accept(check, "Camera", if (view.width > 0 && view.height > 0) guideCrop(view) else null)
                     }
                 },
-                onCaptureError = { stage = ScanStage.Failed(it, null, "Camera", retryable = false) },
+                onCaptureError = { stage = ScanStage.Failed(it, retryable = false) },
                 onGallery = ::pickFromGallery,
-                onClose = onClose
+                onReview = if (photos.isNotEmpty()) ({ stage = ScanStage.Ready }) else null,
+                onClose = { if (photos.isNotEmpty()) stage = ScanStage.Ready else onClose() }
             )
 
             ScanStage.Checking -> CenterMessage("Validating image…", "Checking the file type, size and integrity")
 
-            is ScanStage.Ready -> ReadyView(
-                image = s.image,
-                source = s.source,
+            ScanStage.Ready -> ReadyView(
+                photos = photos,
+                selected = selected.coerceIn(0, (photos.size - 1).coerceAtLeast(0)),
+                consumer = consumer,
                 category = backend.categories?.byId(categoryChoice),
                 caseCategory = case.category,
                 packageChoice = packageChoice,
                 panelW = panelW,
                 panelH = panelH,
+                onSelect = { selected = it },
+                onRemove = { i ->
+                    photos.removeAt(i)
+                    selected = selected.coerceAtMost((photos.size - 1).coerceAtLeast(0))
+                    if (photos.isEmpty()) stage = ScanStage.Capture
+                },
+                onLabel = { i, label -> photos[i] = photos[i].copy(label = label) },
+                onAddCamera = { if (photos.size >= MAX_PHOTOS) backend.showToast("You can add up to $MAX_PHOTOS photos of one product.", isError = true) else stage = ScanStage.Capture },
+                onAddGallery = ::pickFromGallery,
                 onPickCategory = { pickerOpen = true },
                 onPackage = { packageChoice = it },
                 onPanel = { w, h -> panelW = w; panelH = h },
-                onRetake = { stage = ScanStage.Capture },
-                onAnalyse = { analyse(s.image, s.source) }
+                onAnalyse = ::analyse
             )
 
-            is ScanStage.Analyzing -> AnalyzingView(s.image, uploaded)
+            ScanStage.Analyzing -> AnalyzingView(photos, uploaded, consumer, backend.mode)
 
             is ScanStage.Failed -> FailedView(
                 message = s.message,
-                retryable = s.retryable && s.image != null,
-                onRetry = { s.image?.let { analyse(it, s.source) } },
+                retryable = s.retryable && photos.isNotEmpty(),
+                onRetry = ::analyse,
                 onRetake = { stage = ScanStage.Capture },
                 onGallery = ::pickFromGallery,
                 onClose = onClose
@@ -312,7 +375,7 @@ fun PackageScanScreen(
                     }
                 },
                 onRetrySave = { persist(s.json, s.source) },
-                onNext = { stage = ScanStage.Capture; save = null; awaitingConfirm = false },
+                onNext = { photos.clear(); selected = 0; stage = ScanStage.Capture; save = null; awaitingConfirm = false },
                 onOpen = { (save as? SaveState.Saved)?.let { onOpenReport(it.scan.scanCode) } },
                 onClose = onClose
             )
@@ -325,7 +388,7 @@ fun PackageScanScreen(
                 onPick = { picked ->
                     pickerOpen = false
                     categoryChoice = picked?.id
-                    (stage as? ScanStage.Done)?.let { d -> analyse(d.image, d.source) }
+                    if (stage is ScanStage.Done) analyse()
                 },
                 onDismiss = { pickerOpen = false }
             )
@@ -341,9 +404,12 @@ fun PackageScanScreen(
 private fun CaptureView(
     case: ScanTarget,
     sessionCount: Int,
+    photoCount: Int,
+    consumer: Boolean,
     onCaptured: (ByteArray, IntSize) -> Unit,
     onCaptureError: (String) -> Unit,
     onGallery: () -> Unit,
+    onReview: (() -> Unit)?,
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
@@ -447,7 +513,8 @@ private fun CaptureView(
             Column(Modifier.weight(1f)) {
                 Text(case.product, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                 Text(
-                    "${case.subtitle} • package ${case.savedScans + sessionCount + 1}" + if (sessionCount > 0) " • $sessionCount saved now" else "",
+                    "${case.subtitle} • package ${case.savedScans + sessionCount + 1}" + (if (sessionCount > 0) " • $sessionCount saved now" else "") +
+                        (if (photoCount > 0) " • photo ${photoCount + 1}" else ""),
                     color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp
                 )
             }
@@ -466,7 +533,8 @@ private fun CaptureView(
         ) {
             Text(
                 if (focusing) "Focusing on the label…"
-                else "Fill the frame with the label - only the area inside it is analysed. Hold steady, avoid glare.\nKeep the 20 mm ArUco card inside the frame to measure numeral height.",
+                else if (consumer) "Fill the frame with the label - only the area inside it is analysed. Hold steady, avoid glare.\nTake the front, then the back with the ingredients; you can add up to $MAX_PHOTOS photos."
+                else "Fill the frame with the label - only the area inside it is analysed. Hold steady, avoid glare.\nKeep the 20 mm ArUco card inside the frame to measure numeral height. Add more photos (back, sides) for a better result.",
                 color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp, lineHeight = 16.sp, textAlign = TextAlign.Center,
                 modifier = Modifier.padding(horizontal = 24.dp)
             )
@@ -485,7 +553,19 @@ private fun CaptureView(
                 ) {
                     if (shooting) CircularProgressIndicator(color = AC.Blue, strokeWidth = 3.dp, modifier = Modifier.size(30.dp))
                 }
-                Spacer(Modifier.weight(1f))
+                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    if (onReview != null) {
+                        Row(
+                            Modifier.clip(RoundedCornerShape(50)).background(Color.White).clickable(role = Role.Button) { onReview() }
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AIconView(AIcon.CHECK_CIRCLE, AC.Blue, Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Done ($photoCount)", color = AC.Blue, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
+                        }
+                    }
+                }
             }
         }
     }
@@ -577,28 +657,82 @@ private fun DarkRoundButton(icon: AIcon, description: String, onClick: () -> Uni
 
 @Composable
 private fun ReadyView(
-    image: ValidatedImage,
-    source: String,
+    photos: List<ScanPhoto>,
+    selected: Int,
+    consumer: Boolean,
     category: ProductCategory?,
     caseCategory: String,
     packageChoice: String?,
     panelW: String,
     panelH: String,
+    onSelect: (Int) -> Unit,
+    onRemove: (Int) -> Unit,
+    onLabel: (Int, String) -> Unit,
+    onAddCamera: () -> Unit,
+    onAddGallery: () -> Unit,
     onPickCategory: () -> Unit,
     onPackage: (String?) -> Unit,
     onPanel: (String, String) -> Unit,
-    onRetake: () -> Unit,
     onAnalyse: () -> Unit
 ) {
+    val current = photos.getOrNull(selected)
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(16.dp)) {
-        Text("Check the photo", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
-        Text("The label should be in focus and fully visible.", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
-        Spacer(Modifier.height(12.dp))
-        Image(
-            bitmap = image.preview.asImageBitmap(), contentDescription = "Captured package",
-            contentScale = ContentScale.Fit, modifier = Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.Black)
+        Text(if (photos.size > 1) "Check your ${photos.size} photos" else "Check the photo", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
+        Text(
+            "Add the front, back and sides of the same product for the most accurate result.",
+            color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp, lineHeight = 17.sp
         )
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(10.dp))
+        Box(Modifier.weight(1f).heightIn(min = 120.dp).fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.Black)) {
+            current?.let {
+                Image(
+                    bitmap = it.image.preview.asImageBitmap(), contentDescription = "Photo ${selected + 1}: ${it.label}",
+                    contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+
+        // Photo strip: thumbnails (tap to preview, x to remove) and the add buttons
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            photos.forEachIndexed { i, p ->
+                Box(
+                    Modifier.size(width = 64.dp, height = 64.dp).clip(RoundedCornerShape(12.dp)).background(Color.Black)
+                        .border(if (i == selected) 2.dp else 1.dp, if (i == selected) Color(0xFF5EA2FF) else Color.White.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
+                        .clickable(role = Role.Button) { onSelect(i) }
+                ) {
+                    Image(p.image.preview.asImageBitmap(), "Photo ${i + 1}", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    Text(
+                        p.label, color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1,
+                        modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Color(0x99000000)).padding(horizontal = 4.dp, vertical = 1.dp)
+                    )
+                    Box(
+                        Modifier.align(Alignment.TopEnd).padding(3.dp).size(20.dp).clip(CircleShape).background(Color(0xCC000000))
+                            .semantics { contentDescription = "Remove photo ${i + 1}" }.clickable(role = Role.Button) { onRemove(i) },
+                        contentAlignment = Alignment.Center
+                    ) { AIconView(AIcon.CLOSE, Color.White, Modifier.size(12.dp)) }
+                }
+            }
+            if (photos.size < MAX_PHOTOS) {
+                AddPhotoTile("Camera", AIcon.CAMERA, onAddCamera)
+                AddPhotoTile("Gallery", AIcon.UPLOAD, onAddGallery)
+            }
+        }
+        if (current != null) {
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("This photo is the", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+                PhotoLabels.forEach { label ->
+                    val on = current.label == label
+                    Text(
+                        label, color = if (on) AC.Ink else Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.clip(RoundedCornerShape(50)).background(if (on) Color.White else Color.White.copy(alpha = 0.12f))
+                            .clickable(role = Role.Button) { onLabel(selected, label) }.padding(horizontal = 10.dp, vertical = 5.dp)
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
 
         // Rule-engine settings: what the product is decides which standards are verified
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color.White.copy(alpha = 0.08f)).padding(12.dp)) {
@@ -617,26 +751,28 @@ private fun ReadyView(
                 }
                 Text("Change", color = Color(0xFF5EA2FF), fontSize = 12.5.sp, fontWeight = FontWeight.ExtraBold)
             }
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                PackageChoices.forEach { (id, label) ->
-                    val on = packageChoice == id
-                    Text(
-                        label, color = if (on) AC.Ink else Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.Bold,
-                        modifier = Modifier.clip(RoundedCornerShape(50)).background(if (on) Color.White else Color.White.copy(alpha = 0.12f))
-                            .clickable(role = Role.Button) { onPackage(id) }.padding(horizontal = 10.dp, vertical = 6.dp)
-                    )
+            if (!consumer) {
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    PackageChoices.forEach { (id, label) ->
+                        val on = packageChoice == id
+                        Text(
+                            label, color = if (on) AC.Ink else Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.Bold,
+                            modifier = Modifier.clip(RoundedCornerShape(50)).background(if (on) Color.White else Color.White.copy(alpha = 0.12f))
+                                .clickable(role = Role.Button) { onPackage(id) }.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
                 }
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Label panel (cm)", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp, modifier = Modifier.weight(1f))
+                    CmField(panelW, "W") { onPanel(it, panelH) }
+                    Text(" × ", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
+                    CmField(panelH, "H") { onPanel(panelW, it) }
+                }
+                Text("Optional - the panel size sets the Rule 7 minimum font height; without it the ArUco photo scale estimates it.",
+                    color = Color.White.copy(alpha = 0.5f), fontSize = 10.5.sp, lineHeight = 13.sp, modifier = Modifier.padding(top = 4.dp))
             }
-            Spacer(Modifier.height(10.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Label panel (cm)", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp, modifier = Modifier.weight(1f))
-                CmField(panelW, "W") { onPanel(it, panelH) }
-                Text(" × ", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
-                CmField(panelH, "H") { onPanel(panelW, it) }
-            }
-            Text("Optional - the panel size sets the Rule 7 minimum font height; without it the ArUco photo scale estimates it.",
-                color = Color.White.copy(alpha = 0.5f), fontSize = 10.5.sp, lineHeight = 13.sp, modifier = Modifier.padding(top = 4.dp))
         }
         Spacer(Modifier.height(10.dp))
         Row(
@@ -645,17 +781,31 @@ private fun ReadyView(
         ) {
             AIconView(AIcon.SHIELD, AC.Green, Modifier.size(20.dp))
             Spacer(Modifier.width(10.dp))
+            val mb = photos.sumOf { it.image.bytes.size.toLong() } / 1048576.0
             Text(
-                "MIME validated • sending ${image.mime} ${image.width}×${image.height}px • ${image.sizeLabel} • $source" +
-                    if (image.note.isNotBlank()) "\nPrepared on the phone: ${image.note}" else "",
+                "MIME validated • ${photos.size} photo${if (photos.size == 1) "" else "s"} • ${String.format(Locale.US, "%.1f MB", mb)} to upload" +
+                    (current?.image?.note?.takeIf { it.isNotBlank() }?.let { " • Prepared on the phone: $it" } ?: ""),
                 color = Color.White, fontSize = 12.sp, lineHeight = 16.sp
             )
         }
         Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            SoftButton("Retake", onRetake, Modifier.weight(1f), fg = Color.White, bg = Color.White.copy(alpha = 0.14f), height = 50.dp)
-            PrimaryButton("Analyse package", onAnalyse, Modifier.weight(1.5f), icon = AIcon.SEARCH, height = 50.dp)
-        }
+        PrimaryButton(
+            if (photos.size > 1) "Analyse ${photos.size} photos together" else "Analyse package",
+            onAnalyse, Modifier.fillMaxWidth(), icon = AIcon.SEARCH, height = 50.dp, enabled = photos.isNotEmpty()
+        )
+    }
+}
+
+@Composable
+private fun AddPhotoTile(label: String, icon: AIcon, onClick: () -> Unit) {
+    Column(
+        Modifier.size(width = 64.dp, height = 64.dp).clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.1f))
+            .border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+            .semantics { contentDescription = "Add photo from $label" }.clickable(role = Role.Button) { onClick() },
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center
+    ) {
+        AIconView(icon, Color.White, Modifier.size(20.dp))
+        Text("+ $label", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -683,13 +833,14 @@ private fun CmField(value: String, hint: String, onChange: (String) -> Unit) {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun AnalyzingView(image: ValidatedImage, uploaded: Float) {
+private fun AnalyzingView(photos: List<ScanPhoto>, uploaded: Float, consumer: Boolean, mode: String) {
+    val stages = remember(photos.size, consumer, mode) { analyzerStages(consumer, photos.size, mode) }
     var tick by remember { mutableIntStateOf(0) }
     val uploading = uploaded < 1f
     LaunchedEffect(uploading) {
         if (!uploading) {
-            while (tick < AnalyzerStages.size - 1) {
-                delay(if (tick in 4..5) 1600 else 750)
+            while (tick < stages.size - 1) {
+                delay(if (tick in 4..5 || tick >= stages.size - 3) 2200 else 900)
                 tick++
             }
         }
@@ -700,15 +851,19 @@ private fun AnalyzingView(image: ValidatedImage, uploaded: Float) {
     Column(
         Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(16.dp)
     ) {
-        Text("Analysing package", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
+        Text(if (photos.size > 1) "Analysing ${photos.size} photos" else "Analysing package", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
         Text(
             if (uploading) "Uploading securely to the ComplyVision analyzer… ${(uploaded * 100).toInt()}%"
-            else "Running the computer-vision pipeline on the analyzer",
+            else "Reading the label, then verifying with AI. This can take up to a minute.",
             color = Color.White.copy(alpha = 0.75f), fontSize = 13.sp
         )
         Spacer(Modifier.height(12.dp))
-        Box(Modifier.fillMaxWidth().height(230.dp).clip(RoundedCornerShape(18.dp)).background(Color.Black)) {
-            Image(image.preview.asImageBitmap(), null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+        Box(Modifier.fillMaxWidth().height(200.dp).clip(RoundedCornerShape(18.dp)).background(Color.Black)) {
+            Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                photos.take(3).forEach { p ->
+                    Image(p.image.preview.asImageBitmap(), null, contentScale = ContentScale.Fit, modifier = Modifier.weight(1f).fillMaxHeight())
+                }
+            }
             Canvas(Modifier.fillMaxSize()) {
                 val y = size.height * sweep
                 drawRect(Brush.verticalGradient(listOf(Color.Transparent, Color(0x553B8BFF)), y - 60f, y), Offset(0f, y - 60f),
@@ -717,9 +872,9 @@ private fun AnalyzingView(image: ValidatedImage, uploaded: Float) {
             }
         }
         Spacer(Modifier.height(12.dp))
-        ProgressTrack(if (uploading) uploaded * 0.15f else 0.15f + 0.85f * (tick + 1) / AnalyzerStages.size, AC.Blue)
+        ProgressTrack(if (uploading) uploaded * 0.15f else 0.15f + 0.85f * (tick + 1) / stages.size, AC.Blue)
         Spacer(Modifier.height(14.dp))
-        AnalyzerStages.forEachIndexed { i, label ->
+        stages.forEachIndexed { i, label ->
             val state = when {
                 uploading -> if (i == 0) 1 else 0
                 i < tick -> 2
@@ -817,7 +972,7 @@ private fun ResultView(
                         ScanSummary(it.scanCode, it.verdict, it.passed, it.failed, it.review, report.notApplicable, it.score,
                             report.qualityGrade, "", report.analyzerVersion, report.durationMs, report.generatedAt, emptyList())
                     }
-                    SoftButton("PDF", { exporter.packagePdf(case.inspection, summary, report) }, Modifier.weight(1f), icon = AIcon.DOWNLOAD,
+                    SoftButton("PDF", { exporter.packagePdf(case.inspection, summary, report, case.pdfHeading) }, Modifier.weight(1f), icon = AIcon.DOWNLOAD,
                         enabled = exporter.busy == null, height = 42.dp)
                     SoftButton("JSON", { exporter.packageJson(summary, report) }, Modifier.weight(1f), icon = AIcon.DOC,
                         enabled = exporter.busy == null, height = 42.dp)

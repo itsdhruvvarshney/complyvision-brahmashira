@@ -814,6 +814,8 @@ begin
   v_verdict := case when v_fail > 0 then 'Failed' when v_review > 0 then 'Under Review' else 'Passed' end;
   v_score := case when v_pass + v_fail + v_review = 0 then 0
                   else round(100.0 * v_pass / (v_pass + v_fail + v_review), 1) end;
+  -- Pass mark: a compliance score of 75% or more is a pass for inspector and organisation checks
+  if v_pass + v_fail + v_review > 0 and v_score >= 75 then v_verdict := 'Passed'; end if;
   v_scan := 'PKG-' || to_char(now(), 'YY') || '-' || lpad(nextval('public.package_scan_seq')::text, 6, '0');
 
   insert into public.package_scans (
@@ -911,6 +913,8 @@ begin
   v_verdict := case when v_fail > 0 then 'Failed' when v_review > 0 then 'Under Review' else 'Passed' end;
   v_score := case when v_pass + v_fail + v_review = 0 then 0
                   else round(100.0 * v_pass / (v_pass + v_fail + v_review), 1) end;
+  -- Pass mark: a compliance score of 75% or more is a pass for inspector and organisation checks
+  if v_pass + v_fail + v_review > 0 and v_score >= 75 then v_verdict := 'Passed'; end if;
 
   update public.package_scans
      set report = jsonb_set(jsonb_set(report, '{rules}', v_rules), '{summary}',

@@ -177,3 +177,26 @@ def select_rules(rules: list[Rule], category: Category, package_type: str) -> tu
         scope_ok = r.scope == "always" or (r.scope == "wholesale") == (package_type == "wholesale")
         (chosen if scope_ok and r.selects(category) else skipped).append(r)
     return chosen, skipped
+
+
+# ---------------------------------------------------------------------------
+# Regulator scoping: which product categories fall under FSSAI / BIS
+# ---------------------------------------------------------------------------
+AUTHORITIES = ("fssai", "bis")
+_FSSAI_LAW = re.compile(r"(?<![A-Za-z])FSS(?![A-Za-z])|Food Safety", re.I)
+_BIS_LAW = re.compile(r"(?<![A-Za-z])BIS(?![A-Za-z])|(?<![A-Za-z])IS [0-9]|Quality Control|Compulsory Registration", re.I)
+# Rule-id prefixes that belong to one regulator only; the common label-declaration rules apply to both
+_AUTHORITY_ONLY = {"fssai": ("FS-",), "bis": ("BI-",)}
+
+
+def categories_for(authority: str, taxonomy: "Taxonomy") -> set[str]:
+    """Ids of the categories whose governing laws include the regulator's."""
+    pattern = _FSSAI_LAW if authority == "fssai" else _BIS_LAW
+    return {cid for cid, c in taxonomy.by_id.items() if any(pattern.search(law) for law in c.laws)}
+
+
+def rules_for_authority(rules: list, authority: str) -> list:
+    """Drops the other regulator's dedicated rules (FSSAI scan skips BIS marks and vice versa)."""
+    other = "bis" if authority == "fssai" else "fssai"
+    banned = _AUTHORITY_ONLY[other]
+    return [r for r in rules if not r.id.startswith(banned)]

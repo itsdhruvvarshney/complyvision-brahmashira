@@ -118,10 +118,15 @@ fun ConsumerPortalScreen(consumer: ConsumerSession, onLogout: () -> Unit) {
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     val code = openScan
                     when {
-                        code != null -> ConsumerReportPage(
-                            store = store, exporter = exporter, scanCode = code, bottomSpace = BottomSpace,
+                        code != null -> StoredReportPage(
+                            source = remember(store) {
+                                ReportSource(store::scan, store::delete, store::handle) { m, err -> store.showToast(m, err) }
+                            },
+                            exporter = exporter, scanCode = code, heading = null, bottomSpace = BottomSpace,
+                            product = overview?.scans?.firstOrNull { it.summary.scanCode == code }?.product,
                             onBack = { openScan = null },
-                            onDeleted = { openScan = null }
+                            onDeleted = { openScan = null },
+                            extra = { _, report -> ConsumerAsk(overview?.scans?.firstOrNull { it.summary.scanCode == code }?.product ?: code, report) }
                         )
                         tab == CTab.HOME -> ConsumerHomeTab(
                             consumer = consumer, store = store,
@@ -332,7 +337,7 @@ private fun HeroAction(text: String, icon: AIcon, modifier: Modifier, filled: Bo
 }
 
 @Composable
-private fun StatsGrid(t: ConsumerTotals) {
+internal fun StatsGrid(t: ConsumerTotals) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             StatTile("Products checked", fmtInt(t.total), AIcon.CLIPBOARD, AC.Blue, AC.BlueSoft, Modifier.weight(1f))
@@ -346,7 +351,7 @@ private fun StatsGrid(t: ConsumerTotals) {
 }
 
 @Composable
-private fun StatTile(label: String, value: String, icon: AIcon, fg: Color, bg: Color, modifier: Modifier) {
+internal fun StatTile(label: String, value: String, icon: AIcon, fg: Color, bg: Color, modifier: Modifier) {
     GlassCard(modifier, corner = 20.dp, padding = 14.dp) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(40.dp).clip(CircleShape).background(bg), contentAlignment = Alignment.Center) {
@@ -362,7 +367,7 @@ private fun StatTile(label: String, value: String, icon: AIcon, fg: Color, bg: C
 }
 
 @Composable
-private fun DistributionCard(t: ConsumerTotals) {
+internal fun DistributionCard(t: ConsumerTotals) {
     GlassCard(padding = 16.dp) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -390,7 +395,7 @@ private fun DistributionCard(t: ConsumerTotals) {
 }
 
 @Composable
-private fun Legend(text: String, color: Color) {
+internal fun Legend(text: String, color: Color) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(9.dp).clip(CircleShape).background(color))
         Spacer(Modifier.width(5.dp))
@@ -399,7 +404,7 @@ private fun Legend(text: String, color: Color) {
 }
 
 @Composable
-private fun TipCard() {
+internal fun TipCard() {
     val tips = remember {
         listOf(
             "Good light, no glare: tilt the pack slightly if the label shines.",
@@ -422,7 +427,9 @@ private fun TipCard() {
 }
 
 @Composable
-private fun ReportRow(item: ConsumerScan, onClick: () -> Unit) {
+internal fun ReportRow(
+    item: ConsumerScan, badge: String? = null, badgeColors: Pair<Color, Color> = AC.Blue to AC.BlueSoft, onClick: () -> Unit
+) {
     val s = item.summary
     val (fg, bg) = statusStyle(s.verdict)
     val icon = when (s.verdict) { CaseStatus.PASSED -> AIcon.CHECK_CIRCLE; CaseStatus.FAILED -> AIcon.CROSS_CIRCLE; else -> AIcon.HOURGLASS }
@@ -447,6 +454,7 @@ private fun ReportRow(item: ConsumerScan, onClick: () -> Unit) {
             }
             Spacer(Modifier.width(8.dp))
             Column(horizontalAlignment = Alignment.End) {
+                if (badge != null) { Pill(badge, badgeColors.first, badgeColors.second, size = 10); Spacer(Modifier.height(4.dp)) }
                 Pill(s.verdict, fg, bg, size = 10)
                 Spacer(Modifier.height(6.dp))
                 Text("${String.format(java.util.Locale.US, "%.0f", s.score)}%", color = rateColor(s.score), fontSize = 16.sp, fontWeight = FontWeight.ExtraBold)
@@ -469,9 +477,20 @@ private fun ConsumerReportsTab(
     onOpen: (String) -> Unit,
     onScan: () -> Unit
 ) {
+    var compareMode by rememberSaveable { mutableStateOf(false) }
+    var picked by rememberSaveable { mutableStateOf(listOf<String>()) }
+    var comparing by remember { mutableStateOf<Pair<ConsumerScan, ConsumerScan>?>(null) }
+    val allScans = (store.overview as? Load.Ready)?.data?.scans.orEmpty()
+
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(horizontal = 14.dp).padding(top = 6.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("My reports", color = AC.Ink, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("My reports", color = AC.Ink, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 4.dp).weight(1f))
+                if (allScans.size >= 2) SoftButton(if (compareMode) "Cancel" else "Compare", { compareMode = !compareMode; picked = emptyList() },
+                    icon = if (compareMode) AIcon.CLOSE else AIcon.SORT, height = 38.dp)
+            }
+            if (compareMode) Text("Pick two products to compare their ingredients, nutrition, allergens and compliance (${picked.size}/2 selected).",
+                color = AC.Muted, fontSize = 12.5.sp, lineHeight = 17.sp, modifier = Modifier.padding(horizontal = 4.dp))
             SearchBox(query, onQuery, "Search product, brand or category")
         }
         when (val state = store.overview) {
@@ -504,25 +523,56 @@ private fun ConsumerReportsTab(
                     Column(
                         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 14.dp).padding(bottom = BottomSpace),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) { shown.forEach { ReportRow(it) { onOpen(it.summary.scanCode) } } }
+                    ) {
+                        shown.forEach { item ->
+                            val code = item.summary.scanCode
+                            val on = code in picked
+                            Box(Modifier.then(if (on) Modifier.border(2.dp, AC.Blue, RoundedCornerShape(22.dp)) else Modifier)) {
+                                ReportRow(item) {
+                                    if (!compareMode) onOpen(code)
+                                    else picked = if (on) picked - code else (picked + code).takeLast(2)
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
+        if (compareMode && picked.size == 2) {
+            PrimaryButton("Compare these 2 products", {
+                val a = allScans.firstOrNull { it.summary.scanCode == picked[0] }
+                val b = allScans.firstOrNull { it.summary.scanCode == picked[1] }
+                if (a != null && b != null) comparing = a to b
+            }, Modifier.fillMaxWidth().padding(horizontal = 14.dp).padding(bottom = BottomSpace), icon = AIcon.SORT, height = 50.dp)
+        }
     }
+    comparing?.let { (a, b) -> CompareDialog(store, a, b) { comparing = null } }
 }
 
 @Composable
 private fun Modifier.horizontalScrollCompat(): Modifier = this.then(Modifier.horizontalScroll(rememberScrollState()))
 
+/** Where a stored-report page loads from and deletes through (consumer and organisation portals share the page) */
+internal class ReportSource(
+    val scan: suspend (String) -> Pair<ScanSummary, PackageReport>,
+    val delete: suspend (String) -> Boolean,
+    val handle: (Exception) -> String?,
+    val toast: (String, Boolean) -> Unit
+)
+
 /** A stored package report, with export and delete */
 @Composable
-private fun ConsumerReportPage(
-    store: ConsumerStore,
+internal fun StoredReportPage(
+    source: ReportSource,
     exporter: ReportExporter,
     scanCode: String,
+    product: String?,
+    heading: PdfHeading?,
     bottomSpace: Dp,
     onBack: () -> Unit,
-    onDeleted: () -> Unit
+    onDeleted: () -> Unit,
+    /** Extra block shown above the report (consumer: Ask ComplyVision) */
+    extra: (@Composable (ScanSummary, PackageReport) -> Unit)? = null
 ) {
     var state by remember(scanCode) { mutableStateOf<Load<Pair<ScanSummary, PackageReport>>>(Load.Loading) }
     var reload by remember { mutableIntStateOf(0) }
@@ -533,14 +583,13 @@ private fun ConsumerReportPage(
     LaunchedEffect(scanCode, reload) {
         if (state !is Load.Ready) state = Load.Loading
         state = try {
-            Load.Ready(store.scan(scanCode))
+            Load.Ready(source.scan(scanCode))
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            Load.Failed(store.handle(e) ?: return@LaunchedEffect)
+            Load.Failed(source.handle(e) ?: return@LaunchedEffect)
         }
     }
-    val product = (store.overview as? Load.Ready)?.data?.scans?.firstOrNull { it.summary.scanCode == scanCode }?.product
 
     Column(Modifier.fillMaxSize()) {
         DetailHeader(product ?: scanCode, (state as? Load.Ready)?.data?.second?.verdictLabel, onBack)
@@ -555,9 +604,10 @@ private fun ConsumerReportPage(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text("$scanCode • ${fmtDateTime(summary.createdAt)}", color = AC.Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    extra?.invoke(summary, report)
                     PackageReportContent(report, summary, resolving = false, onResolve = null)
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        PrimaryButton("Download PDF", { exporter.packagePdf(null, summary, report) }, Modifier.weight(1f),
+                        PrimaryButton("Download PDF", { exporter.packagePdf(null, summary, report, heading) }, Modifier.weight(1f),
                             loading = exporter.busy == "pdf:${summary.scanCode}", icon = AIcon.DOWNLOAD, height = 44.dp)
                         SoftButton("Export JSON", { exporter.packageJson(summary, report) }, Modifier.weight(1f),
                             enabled = exporter.busy == null, icon = AIcon.DOC, height = 44.dp)
@@ -578,11 +628,11 @@ private fun ConsumerReportPage(
                 TextButton(enabled = !deleting, onClick = {
                     deleting = true
                     scope.launch {
-                        val ok = store.delete(scanCode)
+                        val ok = source.delete(scanCode)
                         deleting = false
                         confirmDelete = false
-                        if (ok) { store.showToast("Report deleted"); onDeleted() }
-                        else store.showToast("Could not delete the report", isError = true)
+                        if (ok) { source.toast("Report deleted", false); onDeleted() }
+                        else source.toast("Could not delete the report", true)
                     }
                 }) { Text(if (deleting) "Deleting…" else "Delete", color = AC.Red, fontWeight = FontWeight.Bold) }
             },
@@ -635,7 +685,7 @@ private fun ConsumerGuideTab(onScan: () -> Unit) {
 }
 
 @Composable
-private fun GuideCard(title: String, icon: AIcon, fg: Color, bg: Color, points: List<String>) {
+internal fun GuideCard(title: String, icon: AIcon, fg: Color, bg: Color, points: List<String>) {
     GlassCard(padding = 16.dp) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(38.dp).clip(CircleShape).background(bg), contentAlignment = Alignment.Center) { AIconView(icon, fg, Modifier.size(21.dp)) }
@@ -699,10 +749,17 @@ private fun ConsumerProfileTab(consumer: ConsumerSession, overview: ConsumerOver
 }
 
 @Composable
-private fun LabelRow(label: String, value: String) {
+internal fun LabelRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         Text(label, color = AC.Muted, fontSize = 13.sp)
         Spacer(Modifier.width(12.dp))
         Text(value, color = AC.Ink, fontSize = 13.5.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
+}
+
+@Composable
+private fun ConsumerAsk(name: String, report: PackageReport) {
+    var open by rememberSaveable { mutableStateOf(false) }
+    AskCard { open = true }
+    if (open) AskComplyVisionDialog(name, remember(report) { productContext(name, report) }) { open = false }
 }

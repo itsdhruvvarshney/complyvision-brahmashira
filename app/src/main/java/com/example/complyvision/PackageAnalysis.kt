@@ -51,9 +51,18 @@ data class RuleResult(
     val applies: String = "",
     /** Set when an inspector settled a REVIEW on the physical pack */
     val resolvedBy: String = "",
-    val resolvedAt: String = ""
+    val resolvedAt: String = "",
+    /** "gemini" when the AI re-read the label and turned a FAIL / REVIEW into a PASS (consumer checks only) */
+    val verifiedBy: String = "",
+    val originalStatus: String = "",
+    /** Gemini's second opinion on a failed / uncertain rule: opinion, quoted evidence, flag for manual review */
+    val geminiOpinion: String = "",
+    val geminiEvidence: String = "",
+    val geminiNote: String = "",
+    val manualReview: Boolean = false
 ) {
     val resolved: Boolean get() = resolvedBy.isNotBlank()
+    val aiVerified: Boolean get() = verifiedBy == "gemini"
 }
 
 data class CategoryEvidence(val source: String, val detail: String)
@@ -219,7 +228,13 @@ data class PackageReport(
                     section = r.str("section").ifBlank { category },
                     applies = r.str("applies"),
                     resolvedBy = resolution?.str("by").orEmpty(),
-                    resolvedAt = resolution?.str("at").orEmpty()
+                    resolvedAt = resolution?.str("at").orEmpty(),
+                    verifiedBy = r.str("verified_by"),
+                    originalStatus = r.str("original_status"),
+                    geminiOpinion = r.optJSONObject("gemini")?.str("opinion").orEmpty(),
+                    geminiEvidence = r.optJSONObject("gemini")?.str("evidence").orEmpty(),
+                    geminiNote = r.optJSONObject("gemini")?.let { g -> g.str("flag").ifBlank { g.str("note") } }.orEmpty(),
+                    manualReview = r.optBoolean("manual_review")
                 )
             }
             val s = o.optJSONObject("summary") ?: JSONObject()
@@ -633,7 +648,7 @@ data class AnalyzerHealth(val ok: Boolean, val version: String, val ocrReady: Bo
 
 object AnalyzerClient {
     private const val CONNECT_TIMEOUT_MS = 10_000
-    private const val READ_TIMEOUT_MS = 180_000
+    private const val READ_TIMEOUT_MS = 330_000
     private const val PREFS = "analyzer"
     private const val KEY_URL = "url"
 
@@ -749,7 +764,8 @@ object AnalyzerClient {
     }
 
     /** Uploads the package photo with its case context and returns the canonical JSON report */
-    suspend fun analyze(image: ValidatedImage, context: Map<String, String?>, onUpload: (Float) -> Unit): JSONObject =
+    /** Sends one or more photos of the same product; the first is the main photo, the others go as "extra" parts */
+    suspend fun analyze(images: List<ValidatedImage>, context: Map<String, String?>, onUpload: (Float) -> Unit): JSONObject =
         withContext(Dispatchers.IO) {
             val boundary = "----ComplyVision" + UUID.randomUUID().toString().replace("-", "")
             val head = StringBuilder()
@@ -760,12 +776,19 @@ object AnalyzerClient {
                     head.append(v).append("\r\n")
                 }
             }
-            head.append("--").append(boundary).append("\r\n")
-            head.append("Content-Disposition: form-data; name=\"image\"; filename=\"").append(image.fileName).append("\"\r\n")
-            head.append("Content-Type: ").append(image.mime).append("\r\n\r\n")
             val headBytes = head.toString().toByteArray(Charsets.UTF_8)
+            // One part per photo: "image" for the first, "extra" for the rest, each with its own header
+            val photoHeads = images.mapIndexed { i, image ->
+                val h = StringBuilder()
+                if (i > 0 || headBytes.isNotEmpty()) h.append("\r\n")
+                h.append("--").append(boundary).append("\r\n")
+                h.append("Content-Disposition: form-data; name=\"").append(if (i == 0) "image" else "extra").append("\"; filename=\"")
+                    .append(image.fileName).append("\"\r\n")
+                h.append("Content-Type: ").append(image.mime).append("\r\n\r\n")
+                h.toString().toByteArray(Charsets.UTF_8)
+            }
             val tailBytes = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
-            val total = headBytes.size.toLong() + image.bytes.size + tailBytes.size
+            val total = headBytes.size.toLong() + photoHeads.sumOf { it.size.toLong() } + images.sumOf { it.bytes.size.toLong() } + tailBytes.size
 
             val c = open(resolve(), "/analyze")
             try {
@@ -776,13 +799,17 @@ object AnalyzerClient {
                 c.outputStream.use { out ->
                     out.write(headBytes)
                     var sent = headBytes.size.toLong()
-                    var offset = 0
-                    while (offset < image.bytes.size) {
-                        val n = minOf(32 * 1024, image.bytes.size - offset)
-                        out.write(image.bytes, offset, n)
-                        offset += n
-                        sent += n
-                        onUpload((sent.toFloat() / total).coerceIn(0f, 1f))
+                    images.forEachIndexed { i, image ->
+                        out.write(photoHeads[i])
+                        sent += photoHeads[i].size
+                        var offset = 0
+                        while (offset < image.bytes.size) {
+                            val n = minOf(32 * 1024, image.bytes.size - offset)
+                            out.write(image.bytes, offset, n)
+                            offset += n
+                            sent += n
+                            onUpload((sent.toFloat() / total).coerceIn(0f, 1f))
+                        }
                     }
                     out.write(tailBytes)
                 }
@@ -800,6 +827,29 @@ object AnalyzerClient {
                 c.disconnect()
             }
         }
+
+    /** POSTs JSON to an analyzer endpoint (Ask ComplyVision, product comparison); Gemini keys never leave the server */
+    suspend fun postJson(path: String, body: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+        val c = open(resolve(), path)
+        try {
+            c.requestMethod = "POST"
+            c.doOutput = true
+            c.readTimeout = 90_000
+            c.setRequestProperty("Content-Type", "application/json")
+            c.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            try {
+                JSONObject(read(c))
+            } catch (e: JSONException) {
+                throw AnalyzerException(AnalyzerFailure.SERVER, "The analyzer returned an unreadable response.")
+            }
+        } catch (e: AnalyzerException) {
+            throw e
+        } catch (e: Exception) {
+            throw translate(e)
+        } finally {
+            c.disconnect()
+        }
+    }
 
     private fun read(c: HttpURLConnection): String {
         val code = c.responseCode

@@ -35,6 +35,7 @@ log = logging.getLogger("analyzer")
 RULES = load_rules()
 TAXONOMY = load_taxonomy()
 gemini = GeminiClient(settings.gemini_keys, settings.gemini_model, settings.gemini_timeout_s, settings.gemini_enabled)
+MAX_EXTRA_PHOTOS = 5
 executor = ThreadPoolExecutor(max_workers=settings.workers, thread_name_prefix="analyze")
 _started = time.time()
 
@@ -139,6 +140,10 @@ async def analyze_endpoint(
     category_id: str | None = Form(None, description="Inspector's category choice; omit to auto-detect"),
     package_type: str | None = Form(None, description="retail / wholesale / institutional / export; omit to read from the label"),
     pdp_area_cm2: str | None = Form(None, description="Measured principal display panel area for the Rule 7 font-size check"),
+    authority: str | None = Form(None, description="fssai or bis: scope the check to one regulator"),
+    mode: str | None = Form(None, description="consumer | inspector | org"),
+    photo_labels: str | None = Form(None, description="comma separated labels for image, extra... e.g. front,back,side"),
+    extra: list[UploadFile] = File(default=[], description="More photos of the same product (up to 5)"),
     x_api_key: str | None = Header(None),
 ):
     _check_key(x_api_key)
@@ -146,6 +151,12 @@ async def analyze_endpoint(
     # Read at most limit + 1 bytes so oversized uploads are rejected without buffering them fully
     data = await image.read(settings.max_upload_bytes + 1)
     await image.close()
+    if len(extra) > MAX_EXTRA_PHOTOS:
+        raise HTTPException(status_code=422, detail={"code": "too_many_photos", "message": f"Send at most {MAX_EXTRA_PHOTOS + 1} photos of one product."})
+    extras = []
+    for up in extra:
+        extras.append((await up.read(settings.max_upload_bytes + 1), up.filename, up.content_type))
+        await up.close()
 
     try:
         engine = _engine()
@@ -154,14 +165,15 @@ async def analyze_endpoint(
 
     context = {"case_code": case_code, "product_name": product_name, "brand": brand, "category": category,
                "declared_mrp": declared_mrp, "declared_quantity": declared_quantity, "marker_mm": marker_mm,
-               "source": source, "category_id": category_id, "package_type": package_type, "pdp_area_cm2": pdp_area_cm2}
+               "source": source, "category_id": category_id, "package_type": package_type, "pdp_area_cm2": pdp_area_cm2,
+               "authority": authority, "mode": mode, "photo_labels": photo_labels}
     loop = asyncio.get_running_loop()
     try:
         deadline = time.monotonic() + settings.request_timeout_s
         report = await asyncio.wait_for(
             loop.run_in_executor(executor, functools.partial(
                 analyze, data, image.filename, image.content_type, context, engine, gemini, settings, RULES,
-                deadline=deadline)),
+                deadline=deadline, extra_images=extras or None)),
             timeout=settings.request_timeout_s,
         )
     except ImageValidationError as exc:
@@ -174,3 +186,43 @@ async def analyze_endpoint(
 
     log.info("Analysed %s: %s in %d ms", case_code or "-", report["summary"]["verdict"], report["duration_ms"])
     return report
+
+
+# ---------------------------------------------------------------------------------------------
+# Consumer helpers: Ask ComplyVision and product comparison (Gemini, keys stay on this server)
+# ---------------------------------------------------------------------------------------------
+from pydantic import BaseModel, Field  # noqa: E402
+
+
+class AskBody(BaseModel):
+    question: str = Field(min_length=2, max_length=800)
+    product: dict
+    history: list[dict] = Field(default_factory=list, max_length=12)
+
+
+class CompareBody(BaseModel):
+    a: dict
+    b: dict
+
+
+def _gemini_json(call, *args):
+    out = call(*args)
+    if not out.get("available"):
+        raise HTTPException(status_code=503, detail={"code": "ai_unavailable", "message": "The AI assistant is busy right now. Please try again in a moment."})
+    for k in ("available", "model", "key_slot", "latency_ms"):
+        out.pop(k, None)
+    return out
+
+
+@app.post("/ask")
+async def ask(body: AskBody, x_api_key: str | None = Header(None)):
+    _check_key(x_api_key)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(executor, lambda: _gemini_json(gemini.ask, body.question, body.product, body.history))
+
+
+@app.post("/compare")
+async def compare(body: CompareBody, x_api_key: str | None = Header(None)):
+    _check_key(x_api_key)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(executor, lambda: _gemini_json(gemini.compare, body.a, body.b))

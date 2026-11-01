@@ -9,6 +9,7 @@ plugins {
 //   supabase.url=https://<project-ref>.supabase.co
 //   supabase.anonKey=<publishable / anon key>
 // The package analyzer (FastAPI service in /analyzer) is configured the same way:
+//   website.url=https://<your-site>         (optional: shown as the organisation registration link)
 //   analyzer.url=http://10.0.2.2:8000      (emulator -> host; use the PC's LAN IP for a real phone)
 //   analyzer.apiKey=<optional, must match ANALYZER_API_KEYS on the server>
 val localProps = Properties().apply {
@@ -34,6 +35,7 @@ android {
 
         buildConfigField("String", "SUPABASE_URL", "\"${config("supabase.url")}\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"${config("supabase.anonKey")}\"")
+        buildConfigField("String", "WEBSITE_URL", "\"${config("website.url")}\"")
         buildConfigField("String", "ANALYZER_URL", "\"${config("analyzer.url", "http://10.0.2.2:8000")}\"")
         buildConfigField("String", "ANALYZER_API_KEY", "\"${config("analyzer.apiKey")}\"")
     }

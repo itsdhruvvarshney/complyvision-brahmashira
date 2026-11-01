@@ -315,6 +315,7 @@ class ConsumerStore(
 }
 
 class ConsumerScanBackend(private val store: ConsumerStore) : ScanBackend {
+    override val mode: String get() = "consumer"
     override val categories get() = store.categories
     override fun loadCategories() = store.loadCategories()
     override suspend fun saveScan(report: JSONObject, source: String) = store.saveScan(report, source)

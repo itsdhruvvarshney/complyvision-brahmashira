@@ -101,11 +101,26 @@ def test_full_pipeline_on_synthetic_label():
 
 def test_pipeline_flags_overpriced_pack():
     img, texts = make_label()
-    report = analyze(encode(img, ".png"), "pack.png", "image/png", {**CONTEXT, "declared_mrp": "120"},
-                     FakeEngine(texts), None, Settings(), today=TODAY)
-    rules = {r["id"]: r for r in report["rules"]}
-    assert rules["LM-13"]["status"] == "FAIL"
-    assert report["summary"]["verdict"] == "FAIL" and "LM-13" in report["summary"]["critical_failures"]
+    ctx = {**CONTEXT, "declared_mrp": "120"}
+    # Consumer checks keep the strict rule-based verdict
+    consumer = analyze(encode(img, ".png"), "pack.png", "image/png", {**ctx, "mode": "consumer"}, FakeEngine(texts), None, Settings(), today=TODAY)
+    assert {r["id"]: r for r in consumer["rules"]}["LM-13"]["status"] == "FAIL"
+    assert consumer["summary"]["verdict"] == "FAIL" and consumer["summary"]["verdict_basis"] == "rules"
+    # Inspector and organisation checks pass at 75% or more; the failed rule is still listed
+    for mode in ("inspector", "org"):
+        report = analyze(encode(img, ".png"), "pack.png", "image/png", {**ctx, "mode": mode}, FakeEngine(texts), None, Settings(), today=TODAY)
+        rules = {r["id"]: r for r in report["rules"]}
+        assert rules["LM-13"]["status"] == "FAIL" and "LM-13" in report["summary"]["critical_failures"]
+        s = report["summary"]
+        assert s["score"] >= 75 and s["verdict"] == "PASS" and s["verdict_basis"] == "score_threshold" and s["engine_verdict"] == "FAIL"
+        assert "pass mark" in s["headline"]
+
+
+def test_below_the_pass_mark_stays_failed():
+    img, texts = make_label()
+    lines = [t for t in texts if not t.startswith(("Net Qty", "MRP", "Unit Sale", "Mfg Date", "Batch", "Mfd by", "Customer", "FSSAI"))]
+    report = analyze(encode(img, ".png"), "pack.png", "image/png", {**CONTEXT, "mode": "inspector"}, FakeEngine(lines), None, Settings(), today=TODAY)
+    assert report["summary"]["score"] < 75 and report["summary"]["verdict"] != "PASS"
 
 
 def test_api(monkeypatch):

@@ -167,6 +167,7 @@ fun ComplyVisionApp(
     val screenStack = remember { mutableStateListOf(AppScreen.SPLASH) }
     var officerSession by remember { mutableStateOf<OfficerSession?>(null) }
     var consumerSession by remember { mutableStateOf<ConsumerSession?>(null) }
+    var orgSession by remember { mutableStateOf<OrgSession?>(null) }
     val currentScreen = screenStack.last()
 
     // Ensure voice instructions are announced once when Main Home Screen opens
@@ -192,6 +193,12 @@ fun ComplyVisionApp(
 
     fun logoutOfficer() {
         officerSession = null
+        navigateBack()
+    }
+
+    fun logoutOrg() {
+        if (orgSession == null) return
+        orgSession = null
         navigateBack()
     }
 
@@ -254,11 +261,13 @@ fun ComplyVisionApp(
             onBack = ::navigateBack
         )
 
-        AppScreen.ORG_PRE_VERIFICATION_HOME -> PlaceholderModuleScreen(
-            title = "Organisation Pre-Verification",
-            subtitle = "Verify organisation compliance documents before regulatory submission",
-            onBack = ::navigateBack
-        )
+        AppScreen.ORG_PRE_VERIFICATION_HOME -> orgSession.let { session ->
+            if (session == null) {
+                OrganizationAuthScreen(onBack = ::navigateBack, onLoggedIn = { orgSession = it })
+            } else {
+                OrganizationPortalScreen(org = session, onLogout = ::logoutOrg)
+            }
+        }
 
         AppScreen.ACCESSIBILITY_HOME -> PlaceholderModuleScreen(
             title = "Accessibility Mode",
