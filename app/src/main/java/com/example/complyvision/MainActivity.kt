@@ -1,12 +1,19 @@
 package com.example.complyvision
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -52,6 +59,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import java.util.Locale
 
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
@@ -63,6 +71,15 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private var volumeUpPressCount = 0
     private var lastVolumeUpTimestamp = 0L
     private var volumeAccessibilityTrigger by mutableIntStateOf(0)
+
+    // Utterances still being spoken: the wake word listener pauses meanwhile (the greeting says the phrase itself)
+    private val speaking = mutableSetOf<String>()
+
+    // Asked once: the microphone lets "Khul Ja Sim Sim" open Accessibility Mode while the app is in the recents
+    private val micRequest = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        WakeWordService.start(this)
+        askForAutoOpen()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -89,7 +106,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                         isTtsReady = isTtsReady,
                         volumeTriggerCount = volumeAccessibilityTrigger,
                         onSpeakHinglish = ::speakHinglish,
-                        onStopSpeech = ::stopSpeech
+                        onStopSpeech = ::stopSpeech,
+                        onOpenAccessibility = ::openAccessibility
                     )
                 }
             }
@@ -104,6 +122,13 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 tts?.setLanguage(Locale("en", "IN"))
             }
             tts?.setSpeechRate(0.95f)
+            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) {}
+                override fun onDone(utteranceId: String?) = finished(utteranceId)
+                @Deprecated("Deprecated in Java")
+                override fun onError(utteranceId: String?) = finished(utteranceId)
+                override fun onStop(utteranceId: String?, interrupted: Boolean) = finished(utteranceId)
+            })
             isTtsReady = true
         }
     }
@@ -111,11 +136,92 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private fun speakHinglish(text: String, flush: Boolean = true) {
         if (!isTtsReady) return
         val queueMode = if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
-        tts?.speak(text, queueMode, null, "cv_tts_${System.currentTimeMillis()}")
+        val id = "cv_tts_${System.nanoTime()}"
+        synchronized(speaking) {
+            if (flush) speaking.clear()
+            speaking += id
+        }
+        WakeWordService.hold("main_tts")
+        tts?.speak(text, queueMode, null, id)
+    }
+
+    private fun finished(id: String?) {
+        val idle = synchronized(speaking) {
+            speaking.remove(id)
+            speaking.isEmpty()
+        }
+        if (idle) WakeWordService.release("main_tts")
     }
 
     private fun stopSpeech() {
         tts?.stop()
+        synchronized(speaking) { speaking.clear() }
+        WakeWordService.release("main_tts")
+    }
+
+    private fun openAccessibility() {
+        stopSpeech()
+        startActivity(Intent(this, AccessibilityActivity::class.java))
+    }
+
+    override fun onStart() {
+        super.onStart()
+        WakeWordService.visibleActivities++
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val prefs = getSharedPreferences("accessibility", MODE_PRIVATE)
+        val micGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        if (!micGranted && !prefs.getBoolean("mic_asked", false)) {
+            prefs.edit().putBoolean("mic_asked", true).apply()
+            micRequest.launch(
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS)
+                else arrayOf(Manifest.permission.RECORD_AUDIO)
+            )
+        } else {
+            // Must start while the app is on screen: Android does not let a microphone service start from the background
+            WakeWordService.start(this)
+            askForAutoOpen()
+        }
+    }
+
+    private var autoOpenDialog: android.app.AlertDialog? = null
+
+    /**
+     * Android only lets an app bring itself full screen from the background with "Display over other apps";
+     * without it "Khul Ja Sim Sim" can only show a notification. Asked on up to three launches, spoken as well.
+     */
+    private fun askForAutoOpen() {
+        val prefs = getSharedPreferences("accessibility", MODE_PRIVATE)
+        val asks = prefs.getInt("overlay_asks", 0)
+        if (autoOpenDialog != null || asks >= 3 || !WakeWordService.isEnabled(this) ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED ||
+            WakeWordService.canOpenFromBackground(this)) return
+        prefs.edit().putInt("overlay_asks", asks + 1).apply()
+        speakHinglish(
+            "Khul Ja Sim Sim bolne par app seedha poori screen par khule, iske liye ek baar Display over other apps ki anumati dijiye. Allow button dabaiye.",
+            true
+        )
+        autoOpenDialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Open with \"Khul Ja Sim Sim\"")
+            .setMessage(
+                "So that saying \"Khul Ja Sim Sim\" opens Accessibility Mode full screen from any app, allow " +
+                    "ComplyVision to \"Display over other apps\" on the next screen.\n\n" +
+                    "Without it Android only shows a notification."
+            )
+            .setPositiveButton("Allow") { _, _ ->
+                stopSpeech()
+                startActivity(WakeWordService.overlaySettingsIntent(this))
+            }
+            .setNegativeButton("Later") { _, _ -> stopSpeech() }
+            .setOnDismissListener { autoOpenDialog = null }
+            .show()
+    }
+
+    override fun onStop() {
+        WakeWordService.visibleActivities--
+        super.onStop()
     }
 
     // Detect 3 consecutive Volume-Up presses to open Accessibility Mode anywhere
@@ -138,11 +244,15 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     override fun onDestroy() {
+        WakeWordService.release("main_tts")
         tts?.stop()
         tts?.shutdown()
         super.onDestroy()
     }
 }
+
+/** Opened by "Learn More" on the home screen */
+const val PROJECT_REPO_URL = "https://github.com/itsdhruvvarshney/complyvision-brahmashira"
 
 // All App Screens (Preserving full navigation structure)
 enum class AppScreen {
@@ -162,7 +272,8 @@ fun ComplyVisionApp(
     isTtsReady: Boolean,
     volumeTriggerCount: Int,
     onSpeakHinglish: (String, Boolean) -> Unit,
-    onStopSpeech: () -> Unit
+    onStopSpeech: () -> Unit,
+    onOpenAccessibility: () -> Unit
 ) {
     val screenStack = remember { mutableStateListOf(AppScreen.SPLASH) }
     var officerSession by remember { mutableStateOf<OfficerSession?>(null) }
@@ -176,10 +287,9 @@ fun ComplyVisionApp(
     fun navigateTo(screen: AppScreen) {
         onStopSpeech()
         if (screen == AppScreen.ACCESSIBILITY_HOME) {
-            onSpeakHinglish(
-                "Accessibility mode khul gaya hai. Ab aap voice guidance se product scan kar sakte hain.",
-                true
-            )
+            // Accessibility Mode is its own activity (AccessibilityActivity): camera + voice assistant
+            onOpenAccessibility()
+            return
         }
         screenStack.add(screen)
     }
@@ -210,7 +320,7 @@ fun ComplyVisionApp(
 
     // Open Accessibility Mode automatically when Volume-Up is pressed 3 times
     LaunchedEffect(volumeTriggerCount) {
-        if (volumeTriggerCount > 0 && currentScreen != AppScreen.ACCESSIBILITY_HOME) {
+        if (volumeTriggerCount > 0) {
             navigateTo(AppScreen.ACCESSIBILITY_HOME)
         }
     }
@@ -220,7 +330,7 @@ fun ComplyVisionApp(
         if (currentScreen == AppScreen.MAIN_HOME && isTtsReady && !hasAnnouncedHomeVoice) {
             hasAnnouncedHomeVoice = true
             onSpeakHinglish(
-                "Namaste! ComplyVision mein aapka swagat hai. Accessibility mode ko kholne ke liye teen baar volume up button dabayein.",
+                "Namaste! ComplyVision mein aapka swagat hai. Accessibility mode kholne ke liye Khul Ja Sim Sim boliye, ya teen baar volume up button dabayein.",
                 true
             )
             onSpeakHinglish(
@@ -269,11 +379,8 @@ fun ComplyVisionApp(
             }
         }
 
-        AppScreen.ACCESSIBILITY_HOME -> PlaceholderModuleScreen(
-            title = "Accessibility Mode",
-            subtitle = "Voice-Guided Scanning & Hindi/English TTS Support (Opened via Card or 3x Volume Up)",
-            onBack = ::navigateBack
-        )
+        // Never pushed: navigateTo opens AccessibilityActivity instead
+        AppScreen.ACCESSIBILITY_HOME -> LaunchedEffect(Unit) { navigateBack() }
 
         AppScreen.OFFICER_LOGIN -> OfficerLoginScreen(
             onBack = ::navigateBack,
@@ -314,6 +421,7 @@ fun rememberDrawableId(name: String): Int {
  */
 @Composable
 fun MainHomeScreen(onNavigate: (AppScreen) -> Unit) {
+    val context = LocalContext.current
     val heroBgId = rememberDrawableId("hero_banner_bg")
     val consumerBgId = rememberDrawableId("card_consumer_bg")
     val businessBgId = rememberDrawableId("card_business_bg")
@@ -407,27 +515,6 @@ fun MainHomeScreen(onNavigate: (AppScreen) -> Unit) {
                             lineHeight = 14.sp
                         )
                     }
-                }
-
-                // Notification Bell Button with Red Dot
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .shadow(4.dp, CircleShape)
-                        .clip(CircleShape)
-                        .background(Color.White)
-                        .clickable { },
-                    contentAlignment = Alignment.Center
-                ) {
-                    BellVectorIcon(tint = Color(0xFF071D36), modifier = Modifier.size(22.dp))
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(top = 7.dp, end = 8.dp)
-                            .size(9.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFE53935))
-                    )
                 }
             }
 
@@ -628,13 +715,6 @@ fun MainHomeScreen(onNavigate: (AppScreen) -> Unit) {
                     fontWeight = FontWeight.ExtraBold,
                     color = Color(0xFF071D36)
                 )
-                Text(
-                    text = "View All →",
-                    fontSize = 12.5.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF0052B4),
-                    modifier = Modifier.clickable { }
-                )
             }
 
             // 5. THREE SIDE-BY-SIDE MODE CARDS (Exact match to reference image)
@@ -752,7 +832,13 @@ fun MainHomeScreen(onNavigate: (AppScreen) -> Unit) {
                             color = Color(0xFF0F3823).copy(alpha = 0.75f),
                             shape = RoundedCornerShape(50),
                             border = BorderStroke(1.dp, Color(0xFF81C784)),
-                            modifier = Modifier.clickable { }
+                            modifier = Modifier.clickable {
+                                try {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(PROJECT_REPO_URL)))
+                                } catch (_: android.content.ActivityNotFoundException) {
+                                    // No browser installed: nothing to open the link with
+                                }
+                            }
                         ) {
                             Text(
                                 text = "Learn More  →",
@@ -930,32 +1016,6 @@ fun ChooseModeCard(
 // ============================================================================
 // CUSTOM VECTOR ICONS (Zero external library dependencies -> Zero compile errors)
 // ============================================================================
-
-@Composable
-fun BellVectorIcon(tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val stroke = Stroke(width = w * 0.09f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        val path = Path().apply {
-            moveTo(w * 0.2f, h * 0.72f)
-            lineTo(w * 0.8f, h * 0.72f)
-            lineTo(w * 0.72f, h * 0.55f)
-            lineTo(w * 0.72f, h * 0.42f)
-            cubicTo(w * 0.72f, h * 0.22f, w * 0.28f, h * 0.22f, w * 0.28f, h * 0.42f)
-            lineTo(w * 0.28f, h * 0.55f)
-            close()
-        }
-        drawPath(path = path, color = tint, style = stroke)
-        drawLine(
-            color = tint,
-            start = Offset(w * 0.42f, h * 0.84f),
-            end = Offset(w * 0.58f, h * 0.84f),
-            strokeWidth = w * 0.09f,
-            cap = StrokeCap.Round
-        )
-    }
-}
 
 @Composable
 fun ModeVectorIcon(iconType: Int, modifier: Modifier = Modifier) {

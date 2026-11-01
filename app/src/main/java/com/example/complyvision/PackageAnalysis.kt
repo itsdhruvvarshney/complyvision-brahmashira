@@ -828,13 +828,13 @@ object AnalyzerClient {
             }
         }
 
-    /** POSTs JSON to an analyzer endpoint (Ask ComplyVision, product comparison); Gemini keys never leave the server */
-    suspend fun postJson(path: String, body: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+    /** POSTs JSON to an analyzer endpoint (Ask ComplyVision, comparison, Accessibility Mode); Gemini keys never leave the server */
+    suspend fun postJson(path: String, body: JSONObject, readTimeoutMs: Int = 90_000): JSONObject = withContext(Dispatchers.IO) {
         val c = open(resolve(), path)
         try {
             c.requestMethod = "POST"
             c.doOutput = true
-            c.readTimeout = 90_000
+            c.readTimeout = readTimeoutMs
             c.setRequestProperty("Content-Type", "application/json")
             c.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
             try {

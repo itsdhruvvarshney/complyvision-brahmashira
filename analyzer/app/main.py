@@ -4,6 +4,9 @@
     GET  /categories   the product taxonomy (category -> laws, quantity measure, rule count)
     GET  /rules        the rule catalog; ?category=<id>&package_type=<id> returns the rules that apply
     POST /analyze      multipart image (+ optional case context) -> canonical JSON report
+    POST /ask, /compare     consumer Q&A and product comparison (Gemini)
+    POST /assist/frame      Accessibility Mode: one live camera frame -> spoken positioning cue
+    POST /assist/turn       Accessibility Mode: one conversation step (reads captured photos when sent)
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadF
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .ai.assist import Assistant, decode_image, split_keys
 from .ai.gemini import GeminiClient
 from .config import ANALYZER_VERSION, settings
 from .ocr.engine import OcrUnavailable, engine_status, get_engine
@@ -35,6 +39,11 @@ log = logging.getLogger("analyzer")
 RULES = load_rules()
 TAXONOMY = load_taxonomy()
 gemini = GeminiClient(settings.gemini_keys, settings.gemini_model, settings.gemini_timeout_s, settings.gemini_enabled)
+_brain_keys, _vision_keys = split_keys(settings.gemini_keys, settings.assist_brain_keys, settings.assist_vision_keys)
+assistant = Assistant(
+    GeminiClient(_brain_keys, settings.assist_model, settings.gemini_timeout_s, settings.gemini_enabled),
+    GeminiClient(_vision_keys, settings.assist_model, settings.gemini_timeout_s, settings.gemini_enabled),
+    settings.assist_frame_thinking, settings.assist_turn_thinking)
 MAX_EXTRA_PHOTOS = 5
 executor = ThreadPoolExecutor(max_workers=settings.workers, thread_name_prefix="analyze")
 _started = time.time()
@@ -85,6 +94,7 @@ def health() -> dict:
         "uptime_s": int(time.time() - _started),
         "ocr": engine_status(),
         "gemini": gemini.status(),
+        "assist": assistant.status(),
         "limits": {"max_upload_mb": settings.max_upload_mb, "types": ["image/jpeg", "image/png", "image/webp"]},
         "rules": len(RULES),
         "categories": len(TAXONOMY.categories),
@@ -226,3 +236,70 @@ async def compare(body: CompareBody, x_api_key: str | None = Header(None)):
     _check_key(x_api_key)
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(executor, lambda: _gemini_json(gemini.compare, body.a, body.b))
+
+
+# ---------------------------------------------------------------------------------------------
+# Accessibility Mode (blind users): live positioning cues and the voice conversation
+# ---------------------------------------------------------------------------------------------
+MAX_ASSIST_IMAGE_B64 = 6 * 1024 * 1024
+
+
+class AssistFrameBody(BaseModel):
+    image: str = Field(min_length=100, max_length=MAX_ASSIST_IMAGE_B64)
+    target: str = "any_side"
+    goal: str = Field(default="", max_length=300)
+    lang: str = "hi"
+
+
+class AssistCapture(BaseModel):
+    image: str = Field(min_length=100, max_length=MAX_ASSIST_IMAGE_B64)
+    label: str = Field(default="photo", max_length=40)
+
+
+class AssistTurnBody(BaseModel):
+    now: dict
+    history: list[dict] = Field(default_factory=list, max_length=80)
+    memory: str = Field(default="", max_length=4000)
+    lang: str = "hi"
+    script: str = "devanagari"
+    today: str = Field(default="", max_length=40)
+    goal: str = Field(default="", max_length=300)
+    frame: str | None = Field(default=None, max_length=MAX_ASSIST_IMAGE_B64)
+    captures: list[AssistCapture] = Field(default_factory=list, max_length=4)
+
+
+def _image_or_422(data: str | None) -> bytes | None:
+    try:
+        return decode_image(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"code": "bad_image", "message": str(exc)})
+
+
+def _assist_ready() -> None:
+    if not assistant.enabled:
+        raise HTTPException(status_code=503, detail={"code": "ai_unavailable", "message": "The assistant is not configured (set GEMINI_API_KEYS)."})
+
+
+@app.post("/assist/frame")
+async def assist_frame(body: AssistFrameBody, x_api_key: str | None = Header(None)):
+    _check_key(x_api_key)
+    _assist_ready()
+    image = _image_or_422(body.image)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(executor, lambda: assistant.frame(image, body.target, body.goal, body.lang))
+
+
+@app.post("/assist/turn")
+async def assist_turn(body: AssistTurnBody, x_api_key: str | None = Header(None)):
+    _check_key(x_api_key)
+    _assist_ready()
+    frame = _image_or_422(body.frame)
+    captures = [(_image_or_422(c.image), c.label) for c in body.captures]
+    loop = asyncio.get_running_loop()
+    out = await loop.run_in_executor(executor, lambda: assistant.turn(
+        now=body.now, history=body.history, memory=body.memory, lang=body.lang, script=body.script,
+        today=body.today, frame=frame, captures=captures or None, goal=body.goal))
+    if not out.get("available"):
+        raise HTTPException(status_code=503, detail={"code": "ai_unavailable", "message": "The assistant is busy right now. Please try again in a moment."})
+    out.pop("available", None)
+    return out

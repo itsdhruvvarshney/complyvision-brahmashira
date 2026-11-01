@@ -103,6 +103,17 @@ class Settings:
     gemini_timeout_s: float = field(default_factory=lambda: _float("GEMINI_TIMEOUT_S", 45.0))
     gemini_enabled: bool = field(default_factory=lambda: _bool("GEMINI_ENABLED", True))
 
+    # Accessibility assistant (blind users). Two pools so the live camera loop never starves the conversation:
+    # the "brain" keeps the whole conversation and decides what to say / do next, the "vision" pool reads
+    # camera frames and captured photos. Unset = GEMINI_API_KEYS split in two (alternate keys).
+    assist_brain_keys: list[str] = field(default_factory=lambda: _list("GEMINI_ASSIST_BRAIN_KEYS"))
+    assist_vision_keys: list[str] = field(default_factory=lambda: _list("GEMINI_ASSIST_VISION_KEYS"))
+    assist_model: str = field(default_factory=lambda: os.getenv("GEMINI_ASSIST_MODEL", "") or os.getenv(
+        "GEMINI_MODEL", "gemini-3.5-flash,gemini-3-flash-preview"))
+    # Reasoning depth per task ("" = model default). Lower is faster; the frame loop must answer in ~1-2 s.
+    assist_frame_thinking: str = field(default_factory=lambda: os.getenv("GEMINI_ASSIST_FRAME_THINKING", "minimal"))
+    assist_turn_thinking: str = field(default_factory=lambda: os.getenv("GEMINI_ASSIST_TURN_THINKING", "low"))
+
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024

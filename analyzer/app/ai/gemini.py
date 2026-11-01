@@ -85,15 +85,20 @@ class GeminiClient:
         self.timeout_s = timeout_s
         self.enabled = enabled and len(self.pool) > 0
         self._model_cool = {m: 0.0 for m in self.models}
+        # Models that answered HTTP 400 to a thinkingConfig: later calls to them skip it
+        self._no_thinking: set[str] = set()
 
     def status(self) -> dict:
         return {"enabled": self.enabled, "model": self.model, "models": self.models, **self.pool.status()}
 
     # ------------------------------------------------------------------ transport
     def generate(self, parts: list[dict], max_tokens: int = 4096, temperature: float = 0.2,
-                 timeout_s: float | None = None, attempts: int = 8, budget_s: float | None = None) -> dict:
+                 timeout_s: float | None = None, attempts: int = 8, budget_s: float | None = None,
+                 thinking: str | None = None) -> dict:
         """Calls Gemini with key and model fail-over. Returns the parsed JSON object plus
-        `available`, `model`, `key_slot`, `latency_ms`; or {"available": False, "reason": ...}."""
+        `available`, `model`, `key_slot`, `latency_ms`; or {"available": False, "reason": ...}.
+        `thinking` ("minimal" / "low" / ...) trades reasoning depth for latency; a model that rejects it
+        is retried without it."""
         if not self.enabled:
             return {"available": False, "reason": "Gemini is not configured (set GEMINI_API_KEYS)."}
 
@@ -101,6 +106,11 @@ class GeminiClient:
             "contents": [{"role": "user", "parts": parts}],
             "generationConfig": {"temperature": temperature, "responseMimeType": "application/json", "maxOutputTokens": max_tokens},
         }
+
+        def body_for(model: str) -> dict:
+            if not thinking or model in self._no_thinking:
+                return body
+            return {**body, "generationConfig": {**body["generationConfig"], "thinkingConfig": {"thinkingLevel": thinking}}}
         errors: list[str] = []
         tried: set[int] = set()
         give_up_at = time.monotonic() + budget_s if budget_s else None
@@ -119,12 +129,11 @@ class GeminiClient:
             for model in models:
                 started = time.monotonic()
                 try:
-                    resp = httpx.post(
-                        ENDPOINT.format(model=model),
-                        headers={"x-goog-api-key": key, "Content-Type": "application/json"},
-                        json=body,
-                        timeout=min(timeout_s or self.timeout_s, max(3.0, give_up_at - time.monotonic())) if give_up_at else (timeout_s or self.timeout_s),
-                    )
+                    resp = self._post(model, key, body_for(model), timeout_s, give_up_at)
+                    if (resp.status_code == 400 and thinking and model not in self._no_thinking
+                            and re.search(r"thinking", _safe_text(resp), re.I)):
+                        self._no_thinking.add(model)
+                        resp = self._post(model, key, body, timeout_s, give_up_at)
                 except httpx.HTTPError as exc:
                     self.pool.cool_down(slot, 10, "network")
                     errors.append(f"slot {slot}: {exc.__class__.__name__}")
@@ -161,6 +170,13 @@ class GeminiClient:
                 log.warning("Gemini call failed on key slot %s: HTTP %s", slot, code)
                 break  # next key
         return {"available": False, "reason": "Gemini unavailable: " + "; ".join(errors)}
+
+    def _post(self, model: str, key: str, body: dict, timeout_s: float | None, give_up_at: float | None):
+        timeout = timeout_s or self.timeout_s
+        if give_up_at is not None:
+            timeout = min(timeout, max(3.0, give_up_at - time.monotonic()))
+        return httpx.post(ENDPOINT.format(model=model),
+                          headers={"x-goog-api-key": key, "Content-Type": "application/json"}, json=body, timeout=timeout)
 
     # ------------------------------------------------------------------ tasks
     def enrich(self, images, ocr_text: str, declarations: dict, context: dict, labels: list[str] | None = None,

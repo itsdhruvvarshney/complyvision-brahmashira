@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- Debug builds only: feed a transcript (string extra "text") to the wake word listener from a PC with
+             adb shell am broadcast -a com.example.complyvision.debug.WAKE -p com.example.complyvision ... -->
+        <receiver
+            android:name=".WakeDebugReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.example.complyvision.debug.WAKE" />
+                <action android:name="com.example.complyvision.debug.UTTERANCE" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>
