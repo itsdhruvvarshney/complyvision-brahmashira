@@ -13,8 +13,8 @@ double-check what the machines could not read, then explains the result in plain
 </div>
 
 > **Looking for the project overview or the web workspace?** See the
-> [`main` branch](https://github.com/itsdhruvvarshney/complyvision-brahmashsira/tree/main) and the
-> [`web` branch](https://github.com/itsdhruvvarshney/complyvision-brahmashsira/tree/web).
+> [`main` branch](https://github.com/itsdhruvvarshney/complyvision-brahmashira/tree/main) and the
+> [`web` branch](https://github.com/itsdhruvvarshney/complyvision-brahmashira/tree/web).
 
 ---
 
@@ -189,8 +189,8 @@ docs/screenshots/            Screenshots used in this README
 
 | Branch | What it holds |
 | --- | --- |
-| [`main`](https://github.com/itsdhruvvarshney/complyvision-brahmashsira/tree/main) | Project overview for the web and the app |
-| [`web`](https://github.com/itsdhruvvarshney/complyvision-brahmashsira/tree/web) | The web workspace for package-label inspection |
-| [`app`](https://github.com/itsdhruvvarshney/complyvision-brahmashsira/tree/app) | This Android app, the analyzer service and the Supabase modules |
+| [`main`](https://github.com/itsdhruvvarshney/complyvision-brahmashira/tree/main) | Project overview for the web and the app |
+| [`web`](https://github.com/itsdhruvvarshney/complyvision-brahmashira/tree/web) | The web workspace for package-label inspection |
+| [`app`](https://github.com/itsdhruvvarshney/complyvision-brahmashira/tree/app) | This Android app, the analyzer service and the Supabase modules |
 
 <div align="center"><sub>Built by Team Brahma Shira · Safer products, healthier India.</sub></div>

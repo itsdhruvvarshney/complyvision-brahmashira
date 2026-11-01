@@ -7,8 +7,8 @@
 ComplyVision reads product labels with OCR and computer vision, checks them against Indian regulations
 (Legal Metrology, FSSAI, BIS) with a transparent rule engine, and uses Gemini to double-check and explain the result.
 
-[![Android app](https://img.shields.io/badge/Android%20app-app%20branch-3DDC84?logo=android&logoColor=white)](https://github.com/itsdhruvvarshney/complyvision-brahmashsira/tree/app)
-[![Web workspace](https://img.shields.io/badge/Web%20workspace-web%20branch-1D4ED8?logo=react&logoColor=white)](https://github.com/itsdhruvvarshney/complyvision-brahmashsira/tree/web)
+[![Android app](https://img.shields.io/badge/Android%20app-app%20branch-3DDC84?logo=android&logoColor=white)](https://github.com/itsdhruvvarshney/complyvision-brahmashira/tree/app)
+[![Web workspace](https://img.shields.io/badge/Web%20workspace-web%20branch-1D4ED8?logo=react&logoColor=white)](https://github.com/itsdhruvvarshney/complyvision-brahmashira/tree/web)
 
 </div>
 
@@ -18,8 +18,8 @@ ComplyVision reads product labels with OCR and computer vision, checks them agai
 
 | | Branch | What you will find |
 | --- | --- | --- |
-| 📱 | **[`app`](https://github.com/itsdhruvvarshney/complyvision-brahmashsira/tree/app)** | The Android app (Kotlin, Jetpack Compose), the FastAPI analyzer service with the OCR, vision, rule-engine and Gemini pipeline, the Supabase SQL modules, and the organisation registration and reset pages. |
-| 🌐 | **[`web`](https://github.com/itsdhruvvarshney/complyvision-brahmashsira/tree/web)** | The web workspace: a React inspection workspace, a FastAPI analysis service and an Express OTP account API. |
+| 📱 | **[`app`](https://github.com/itsdhruvvarshney/complyvision-brahmashira/tree/app)** | The Android app (Kotlin, Jetpack Compose), the FastAPI analyzer service with the OCR, vision, rule-engine and Gemini pipeline, the Supabase SQL modules, and the organisation registration and reset pages. |
+| 🌐 | **[`web`](https://github.com/itsdhruvvarshney/complyvision-brahmashira/tree/web)** | The web workspace: a React inspection workspace, a FastAPI analysis service and an Express OTP account API. |
 
 ---
 
@@ -46,16 +46,16 @@ engine, three audiences:
 
 <table>
   <tr>
-    <td align="center"><img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashsira/app/docs/screenshots/01-home.jpg" width="190"><br><sub><b>Choose your mode</b></sub></td>
-    <td align="center"><img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashsira/app/docs/screenshots/02-consumer-login.jpg" width="190"><br><sub><b>Consumer portal</b></sub></td>
-    <td align="center"><img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashsira/app/docs/screenshots/04-business-portal.jpg" width="190"><br><sub><b>Business portal</b></sub></td>
-    <td align="center"><img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashsira/app/docs/screenshots/06-organisation-login.jpg" width="190"><br><sub><b>Organisation login</b></sub></td>
+    <td align="center"><img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashira/app/docs/screenshots/01-home.jpg" width="190"><br><sub><b>Choose your mode</b></sub></td>
+    <td align="center"><img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashira/app/docs/screenshots/02-consumer-login.jpg" width="190"><br><sub><b>Consumer portal</b></sub></td>
+    <td align="center"><img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashira/app/docs/screenshots/04-business-portal.jpg" width="190"><br><sub><b>Business portal</b></sub></td>
+    <td align="center"><img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashira/app/docs/screenshots/06-organisation-login.jpg" width="190"><br><sub><b>Organisation login</b></sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashsira/app/docs/screenshots/08-org-home.jpg" width="190"><br><sub><b>Organisation home</b></sub></td>
-    <td align="center"><img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashsira/app/docs/screenshots/09-org-bis.jpg" width="190"><br><sub><b>BIS verification</b></sub></td>
-    <td align="center"><img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashsira/app/docs/screenshots/10-org-fssai.jpg" width="190"><br><sub><b>Pre-FSSAI verification</b></sub></td>
-    <td align="center"><img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashsira/app/docs/screenshots/05-officer-login.jpg" width="190"><br><sub><b>Legal Metrology officer</b></sub></td>
+    <td align="center"><img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashira/app/docs/screenshots/08-org-home.jpg" width="190"><br><sub><b>Organisation home</b></sub></td>
+    <td align="center"><img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashira/app/docs/screenshots/09-org-bis.jpg" width="190"><br><sub><b>BIS verification</b></sub></td>
+    <td align="center"><img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashira/app/docs/screenshots/10-org-fssai.jpg" width="190"><br><sub><b>Pre-FSSAI verification</b></sub></td>
+    <td align="center"><img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashira/app/docs/screenshots/05-officer-login.jpg" width="190"><br><sub><b>Legal Metrology officer</b></sub></td>
   </tr>
 </table>
 
@@ -85,7 +85,7 @@ evidence behind each one. The workspace then lets the reviewer:
 
 Declarations are shown as **Passed**, **Review** or **Failed**. Confidence describes extraction evidence, not legal
 certainty. The web workspace includes an Express account API for email OTP verification and a prototype
-registration flow. See the [`web` branch](https://github.com/itsdhruvvarshney/complyvision-brahmashsira/tree/web)
+registration flow. See the [`web` branch](https://github.com/itsdhruvvarshney/complyvision-brahmashira/tree/web)
 for details.
 
 ---
