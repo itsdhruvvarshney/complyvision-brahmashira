@@ -210,9 +210,9 @@ fun InspectorDashboardScreen(session: OfficerSession, onLogout: () -> Unit) {
 
             scanningCase?.let { target ->
                 PackageScanScreen(
-                    store = store,
+                    backend = remember(target.code) { InspectorScanBackend(store, target.code) },
                     exporter = exporter,
-                    case = target,
+                    case = target.toScanTarget(),
                     onClose = {
                         scanningCase = null
                         caseRefresh++

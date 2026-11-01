@@ -595,7 +595,7 @@ private fun LoginField(
 
 /** Distorted code on a noisy tile; the characters come from [text] and the noise is seeded by it */
 @Composable
-private fun CaptchaImage(text: String, modifier: Modifier = Modifier) {
+internal fun CaptchaImage(text: String, modifier: Modifier = Modifier) {
     val measurer = rememberTextMeasurer()
     val style = TextStyle(
         fontSize = 24.sp,

@@ -16,10 +16,11 @@ import kotlinx.coroutines.launch
  */
 @Stable
 class InspectorStore(
-    val session: OfficerSession,
+    session: OfficerSession,
     private val scope: CoroutineScope,
     private val onExpired: () -> Unit
-) {
+) : ExportHost {
+    override val session: OfficerSession = session
     val token get() = session.token
 
     var days by mutableIntStateOf(30); private set
@@ -43,7 +44,7 @@ class InspectorStore(
     private var casesJob: Job? = null
     private var historyJob: Job? = null
 
-    fun showToast(message: String, isError: Boolean = false, actionLabel: String? = null, action: (() -> Unit)? = null) {
+    override fun showToast(message: String, isError: Boolean, actionLabel: String?, action: (() -> Unit)?) {
         toast = Toast(System.nanoTime(), message, isError, actionLabel, action)
     }
 
@@ -52,7 +53,7 @@ class InspectorStore(
     }
 
     /** Maps a failure to a user message, or null when the session expired (the caller just stops) */
-    fun handle(e: Exception): String? = when (e) {
+    override fun handle(e: Exception): String? = when (e) {
         is SessionExpiredException -> {
             if (!expired) {
                 expired = true
@@ -145,7 +146,7 @@ class InspectorStore(
 
     suspend fun case(code: String): CaseFull = guarded { InspectorRepository.case(token, code) }
     suspend fun scan(scanCode: String) = guarded { InspectorRepository.scan(token, scanCode) }
-    suspend fun caseReport(code: String): CaseReport = guarded { InspectorRepository.caseReport(token, code) }
+    override suspend fun caseReport(code: String): CaseReport = guarded { InspectorRepository.caseReport(token, code) }
 
     // ---- Mutations: refresh every section afterwards ----
 

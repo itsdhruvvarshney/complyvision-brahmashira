@@ -25,7 +25,7 @@ import java.time.LocalDate
  */
 @Stable
 class ReportExporter internal constructor(
-    private val store: InspectorStore,
+    private val store: ExportHost,
     private val launchPdf: (String) -> Unit,
     private val launchJson: (String) -> Unit,
     private val launch: (suspend () -> Unit) -> Unit
@@ -83,7 +83,7 @@ class ReportExporter internal constructor(
 }
 
 @Composable
-fun rememberReportExporter(store: InspectorStore): ReportExporter {
+fun rememberReportExporter(store: ExportHost): ReportExporter {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val holder = remember { arrayOfNulls<ReportExporter>(1) }

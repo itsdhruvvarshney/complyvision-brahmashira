@@ -166,6 +166,7 @@ fun ComplyVisionApp(
 ) {
     val screenStack = remember { mutableStateListOf(AppScreen.SPLASH) }
     var officerSession by remember { mutableStateOf<OfficerSession?>(null) }
+    var consumerSession by remember { mutableStateOf<ConsumerSession?>(null) }
     val currentScreen = screenStack.last()
 
     // Ensure voice instructions are announced once when Main Home Screen opens
@@ -191,6 +192,12 @@ fun ComplyVisionApp(
 
     fun logoutOfficer() {
         officerSession = null
+        navigateBack()
+    }
+
+    fun logoutConsumer() {
+        if (consumerSession == null) return
+        consumerSession = null
         navigateBack()
     }
 
@@ -234,11 +241,13 @@ fun ComplyVisionApp(
 
         AppScreen.MAIN_HOME -> MainHomeScreen(onNavigate = ::navigateTo)
 
-        AppScreen.CONSUMER_DASHBOARD -> PlaceholderModuleScreen(
-            title = "General Consumer Portal",
-            subtitle = "Front Claim vs. Back Label & Ingredient Verification",
-            onBack = ::navigateBack
-        )
+        AppScreen.CONSUMER_DASHBOARD -> consumerSession.let { session ->
+            if (session == null) {
+                ConsumerAuthScreen(onBack = ::navigateBack, onAuthenticated = { consumerSession = it })
+            } else {
+                ConsumerPortalScreen(consumer = session, onLogout = ::logoutConsumer)
+            }
+        }
 
         AppScreen.BUSINESS_PORTAL_HOME -> BusinessPortalHomeScreen(
             onNavigate = ::navigateTo,

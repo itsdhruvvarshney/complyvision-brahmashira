@@ -131,15 +131,17 @@ private val PackageChoices = listOf(null to "Auto", "retail" to "Retail", "whole
 
 @Composable
 fun PackageScanScreen(
-    store: InspectorStore,
+    backend: ScanBackend,
     exporter: ReportExporter,
-    case: MyCase,
+    case: ScanTarget,
     onClose: () -> Unit,
-    onOpenReport: (String) -> Unit
+    onOpenReport: (String) -> Unit,
+    /** Opens the photo picker straight away (still falls back to the camera if nothing is picked) */
+    startWithGallery: Boolean = false
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var stage by remember { mutableStateOf<ScanStage>(ScanStage.Capture) }
+    var stage by remember { mutableStateOf<ScanStage>(if (startWithGallery) ScanStage.Checking else ScanStage.Capture) }
     var save by remember { mutableStateOf<SaveState?>(null) }
     var uploaded by remember { mutableFloatStateOf(0f) }
     var sessionCount by remember { mutableIntStateOf(0) }
@@ -152,7 +154,7 @@ fun PackageScanScreen(
     var pickerOpen by remember { mutableStateOf(false) }
     var awaitingConfirm by remember { mutableStateOf(false) }
     var resolving by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { store.loadCategories() }
+    LaunchedEffect(Unit) { backend.loadCategories() }
     val panelArea = panelW.toDoubleOrNull()?.let { w -> panelH.toDoubleOrNull()?.let { h -> w * h } }?.takeIf { it in 1.0..20000.0 }
 
     /** MIME-validates the original, then crops / resizes it on the phone before upload */
@@ -173,14 +175,17 @@ fun PackageScanScreen(
         if (uri != null) {
             stage = ScanStage.Checking
             scope.launch { accept(ImageValidator.validate(context, uri, "package"), "Gallery") }
+        } else if (stage == ScanStage.Checking) {
+            stage = ScanStage.Capture // the picker was dismissed without a photo
         }
     }
     fun pickFromGallery() = gallery.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    LaunchedEffect(Unit) { if (startWithGallery) pickFromGallery() }
 
     fun persist(json: JSONObject, source: String) {
         save = SaveState.Saving
         scope.launch {
-            save = when (val r = store.saveScan(case.code, json, source)) {
+            save = when (val r = backend.saveScan(json, source)) {
                 is SaveScanResult.Saved -> {
                     sessionCount++
                     SaveState.Saved(r.scan)
@@ -200,7 +205,7 @@ fun PackageScanScreen(
                 val json = AnalyzerClient.analyze(
                     image,
                     mapOf(
-                        "case_code" to case.code,
+                        "case_code" to case.inspection?.code,
                         "product_name" to case.product,
                         "brand" to case.brand,
                         "category" to case.category,
@@ -253,7 +258,7 @@ fun PackageScanScreen(
             is ScanStage.Ready -> ReadyView(
                 image = s.image,
                 source = s.source,
-                category = store.categories?.byId(categoryChoice),
+                category = backend.categories?.byId(categoryChoice),
                 caseCategory = case.category,
                 packageChoice = packageChoice,
                 panelW = panelW,
@@ -286,21 +291,21 @@ fun PackageScanScreen(
                 onConfirm = { awaitingConfirm = false; persist(s.json, s.source) },
                 // Re-checking with another category is offered until the result is saved
                 onChangeCategory = if (save == null || save is SaveState.Error) ({ pickerOpen = true }) else null,
-                onResolve = (save as? SaveState.Saved)?.let { saved ->
+                onResolve = (save as? SaveState.Saved)?.takeIf { backend.canResolve }?.let { saved ->
                     { decisions: List<RuleDecision> ->
                         resolving = true
                         scope.launch {
-                            when (val r = store.resolveScan(saved.scan.scanCode, decisions)) {
+                            when (val r = backend.resolveScan(saved.scan.scanCode, decisions)) {
                                 is ActionResult.Done -> {
                                     try {
-                                        val (sum, fresh) = store.scan(saved.scan.scanCode)
+                                        val (sum, fresh) = backend.reloadScan(saved.scan.scanCode)
                                         stage = s.copy(report = fresh)
                                         save = SaveState.Saved(SavedScan(sum.scanCode, sum.verdict, sum.passed, sum.failed, sum.review, sum.score))
                                     } catch (_: Exception) {
                                     }
-                                    store.showToast("Decisions saved - package re-scored")
+                                    backend.showToast("Decisions saved - package re-scored")
                                 }
-                                is ActionResult.Rejected -> store.showToast(r.message, isError = true)
+                                is ActionResult.Rejected -> backend.showToast(r.message, isError = true)
                             }
                             resolving = false
                         }
@@ -315,7 +320,7 @@ fun PackageScanScreen(
 
         if (pickerOpen) {
             CategoryPickerDialog(
-                catalog = store.categories,
+                catalog = backend.categories,
                 selectedId = categoryChoice,
                 onPick = { picked ->
                     pickerOpen = false
@@ -334,7 +339,7 @@ fun PackageScanScreen(
 
 @Composable
 private fun CaptureView(
-    case: MyCase,
+    case: ScanTarget,
     sessionCount: Int,
     onCaptured: (ByteArray, IntSize) -> Unit,
     onCaptureError: (String) -> Unit,
@@ -442,7 +447,7 @@ private fun CaptureView(
             Column(Modifier.weight(1f)) {
                 Text(case.product, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                 Text(
-                    "${case.code} • package ${case.scans.total + sessionCount + 1}" + if (sessionCount > 0) " • $sessionCount saved now" else "",
+                    "${case.subtitle} • package ${case.savedScans + sessionCount + 1}" + if (sessionCount > 0) " • $sessionCount saved now" else "",
                     color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp
                 )
             }
@@ -783,7 +788,7 @@ private fun FailedView(message: String, retryable: Boolean, onRetry: () -> Unit,
 
 @Composable
 private fun ResultView(
-    case: MyCase,
+    case: ScanTarget,
     report: PackageReport,
     save: SaveState?,
     exporter: ReportExporter,
@@ -805,14 +810,14 @@ private fun ResultView(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 if (awaitingConfirm) ConfirmCategoryBanner(report.classification, onConfirm, onChangeCategory)
-                else SaveBanner(save, onRetrySave, onOpen)
+                else SaveBanner(save, case.savedNote, onRetrySave, onOpen)
                 PackageReportContent(report, null, onChangeCategory, resolving, onResolve)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     val summary = (save as? SaveState.Saved)?.scan?.let {
                         ScanSummary(it.scanCode, it.verdict, it.passed, it.failed, it.review, report.notApplicable, it.score,
                             report.qualityGrade, "", report.analyzerVersion, report.durationMs, report.generatedAt, emptyList())
                     }
-                    SoftButton("PDF", { exporter.packagePdf(case, summary, report) }, Modifier.weight(1f), icon = AIcon.DOWNLOAD,
+                    SoftButton("PDF", { exporter.packagePdf(case.inspection, summary, report) }, Modifier.weight(1f), icon = AIcon.DOWNLOAD,
                         enabled = exporter.busy == null, height = 42.dp)
                     SoftButton("JSON", { exporter.packageJson(summary, report) }, Modifier.weight(1f), icon = AIcon.DOC,
                         enabled = exporter.busy == null, height = 42.dp)
@@ -852,10 +857,10 @@ private fun ConfirmCategoryBanner(c: Classification?, onConfirm: () -> Unit, onC
 }
 
 @Composable
-private fun SaveBanner(save: SaveState?, onRetry: () -> Unit, onOpen: () -> Unit) {
+private fun SaveBanner(save: SaveState?, note: String, onRetry: () -> Unit, onOpen: () -> Unit) {
     val (tone, text) = when (save) {
-        null, SaveState.Saving -> AC.Blue to "Saving result to the inspection record…"
-        is SaveState.Saved -> AC.Green to "Saved as ${save.scan.scanCode} • added to your inspection"
+        null, SaveState.Saving -> AC.Blue to "Saving result to your records…"
+        is SaveState.Saved -> AC.Green to "Saved as ${save.scan.scanCode} • $note"
         is SaveState.Error -> AC.Red to "Not saved: ${save.message}"
     }
     Row(
