@@ -12,29 +12,41 @@ The workspace is designed to make the review understandable: each declaration ha
 
 ## Website sections and screenshots
 
+<div align="center">
+  <h3>Explore the ComplyVision experience</h3>
+  <p><em>A visual tour of the platform's key screens</em></p>
+</div>
+
+<table align="center" cellspacing="18" cellpadding="0">
+  <tr>
+    <td align="center" valign="top"><h4>Public homepage &amp; product demo</h4><a href="docs/screenshots/complyvision-homepage-full.png"><img src="docs/screenshots/complyvision-homepage-full.png" alt="ComplyVision homepage and product demo" width="480" loading="lazy"></a></td>
+    <td align="center" valign="top"><h4>Inspector dashboard</h4><a href="docs/screenshots/inspector-dashboard.png"><img src="docs/screenshots/inspector-dashboard.png" alt="Inspector dashboard" width="480" loading="lazy"></a></td>
+  </tr>
+  <tr>
+    <td align="center" valign="top"><h4>Inspection history</h4><a href="docs/screenshots/inspection-history.png"><img src="docs/screenshots/inspection-history.png" alt="Inspection history" width="480" loading="lazy"></a></td>
+    <td align="center" valign="top"><h4>Rule management</h4><a href="docs/screenshots/rule-management.png"><img src="docs/screenshots/rule-management.png" alt="Rule management" width="480" loading="lazy"></a></td>
+  </tr>
+  <tr>
+    <td align="center" valign="top"><h4>Inspection reports</h4><a href="docs/screenshots/inspection-reports.png"><img src="docs/screenshots/inspection-reports.png" alt="Inspection reports" width="480" loading="lazy"></a></td>
+    <td align="center" valign="top"><h4>Legal Metrology sign-in</h4><a href="docs/screenshots/legal-metrology-sign-in.png"><img src="docs/screenshots/legal-metrology-sign-in.png" alt="Legal Metrology sign-in" width="480" loading="lazy"></a></td>
+  </tr>
+</table>
+
+<br>
+
 ### Homepage and product demo
 
 The public homepage introduces ComplyVision and its accessible label-checking workflow. The product demo lets visitors preview sample results, switch shopper profiles and languages, and hear a spoken summary.
-
-![ComplyVision homepage and product demo](docs/screenshots/complyvision-homepage.png)
 
 ### Sign-in and pre-verification
 
 Users choose the Legal Metrology officer portal or the business pre-verification portal. The business flow verifies the user's email with a one-time code. Preview actions are available for local demonstrations.
 
-#### Legal Metrology officer sign-in
-
-![Legal Metrology officer sign-in screen](docs/screenshots/legal-metrology-sign-in.png)
-
 #### Business pre-verification sign-in
-
-![Business pre-verification sign-in screen](docs/screenshots/preverification-sign-in.png)
 
 ### Inspector dashboard
 
 The inspector dashboard summarizes assigned and recent inspections and links into the review workflow. Preview mode uses sample browser data.
-
-![Inspector dashboard with assigned cases, case flow, recent activity, and case queue](docs/screenshots/inspector-dashboard.png)
 
 ### Supreme Authority dashboard
 
@@ -52,8 +64,6 @@ The workspace presents the package image, extracted declarations, rule outcomes,
 
 The history page lists saved evaluations in the current browser profile and opens reports for review.
 
-![Inspection history with a saved report](docs/screenshots/inspection-history.png)
-
 ### Accessibility insights
 
 Accessibility insights turns an inspection's extracted values into a spoken summary, with language choices where browser speech support is available.
@@ -62,19 +72,15 @@ Accessibility insights turns an inspection's extracted values into a spoken summ
 
 The rule catalogue supports searching and filtering the prototype rule matrix, with applicability and implementation notes.
 
-![Legal Metrology rule catalogue](docs/screenshots/rule-management.png)
-
 ### Analytics and reports
 
 Reports present the selected evaluation's rule outcomes, evidence, measurements, and export options.
-
-![Inspection report with overall result, rule totals, and extracted declarations](docs/screenshots/inspection-reports.png)
 
 ### Settings and account profile
 
 Settings shows the signed-in account identifier, email when available, portal role, sign-in type, account status, and role scope. Workspace language and summary preferences are saved in the browser.
 
-The screenshots are provided for visual reference and may show sample data. Supreme Authority dashboard, business pre-verification dashboard, inspection workspace, accessibility insights, and settings are documented above but do not yet have screenshots in this README.
+The screenshots are provided for visual reference and may show sample data.
 
 ## Inspection workflow
 
