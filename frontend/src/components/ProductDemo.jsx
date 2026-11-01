@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 const products = [
   { name: 'Masala Biscuits', kind: 'biscuit', verdict: 'pass', badge: 'All declarations found', fields: [['Net quantity', '200 g', 'ok', 'Rule 6(1)'], ['MRP', '₹40.00', 'ok', 'Rule 6(1)'], ['Packed on', '03/2026', 'ok', 'Rule 6(1)']], copy: { en: 'Masala biscuits, 200 grams, priced forty rupees, packed March 2026. All required details were found.', hi: 'मसाला बिस्कुट, 200 ग्राम, कीमत चालीस रुपये, मार्च 2026 में पैक। सभी ज़रूरी जानकारी मौजूद है।', ta: 'மசாலா பிஸ்கட், 200 கிராம், விலை நாற்பது ரூபாய், மார்ச் 2026 இல் பேக் செய்யப்பட்டது. தேவையான அனைத்து தகவலும் உள்ளது.' } },
@@ -31,10 +31,43 @@ export function ProductDemo() {
     setProfile(id); setPhoneLarge(id === 'low' || id === 'elder'); setPhoneContrast(id === 'low')
     if (id === 'hi' || id === 'ta') setLanguage(id)
   }
-  const play = () => {
-    if (speaking) { speechSynthesis.cancel(); setSpeaking(false); return }
-    const utterance = new SpeechSynthesisUtterance(product.copy[language]); utterance.lang = language === 'en' ? 'en-IN' : `${language}-IN`; utterance.rate = profile === 'elder' ? 0.8 : 0.95; utterance.onend = () => setSpeaking(false); speechSynthesis.cancel(); speechSynthesis.speak(utterance); setSpeaking(true)
-  }
+  const play = useCallback(() => {
+    if (!('speechSynthesis' in window) || !('SpeechSynthesisUtterance' in window)) {
+      window.dispatchEvent(new CustomEvent('complyvision:audio-state', { detail: { speaking: false, unavailable: true } }))
+      return
+    }
+    if (speaking) {
+      speechSynthesis.cancel()
+      setSpeaking(false)
+      window.dispatchEvent(new CustomEvent('complyvision:audio-state', { detail: { speaking: false } }))
+      return
+    }
+    const utterance = new SpeechSynthesisUtterance(product.copy[language])
+    utterance.lang = language === 'en' ? 'en-IN' : `${language}-IN`
+    utterance.rate = profile === 'elder' ? 0.8 : 0.95
+    utterance.onend = () => {
+      setSpeaking(false)
+      window.dispatchEvent(new CustomEvent('complyvision:audio-state', { detail: { speaking: false } }))
+    }
+    utterance.onerror = () => {
+      setSpeaking(false)
+      window.dispatchEvent(new CustomEvent('complyvision:audio-state', { detail: { speaking: false, unavailable: true } }))
+    }
+    speechSynthesis.cancel()
+    speechSynthesis.speak(utterance)
+    setSpeaking(true)
+    window.dispatchEvent(new CustomEvent('complyvision:audio-state', { detail: { speaking: true } }))
+  }, [language, product, profile, speaking])
+
+  useEffect(() => {
+    const hearSummary = () => { setResult(true); play() }
+    window.addEventListener('complyvision:hear-audio-summary', hearSummary)
+    return () => window.removeEventListener('complyvision:hear-audio-summary', hearSummary)
+  }, [play])
+
+  useEffect(() => () => {
+    if ('speechSynthesis' in window) speechSynthesis.cancel()
+  }, [])
 
   return <section className="demo-stage" id="demo" aria-label="Live demo">
     <div className="demo-copy">

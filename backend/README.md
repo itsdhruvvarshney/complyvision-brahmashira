@@ -32,6 +32,10 @@ The OTP service listens on port 3000. Set `ALLOWED_ORIGIN` to the deployed front
 - `POST /api/otp/verify` with `{ "email": "name@example.com", "code": "123456" }`
 - `GET /api/health`
 
+## Portal workflow API (local demo mode)
+
+In development, the account API also exposes role-scoped sample routes under `/api/portal` for case dashboards, organization history, authority/inspector listings, assignments, inspection start, pass/fail decisions, authority deactivation, and password reset. The website sends `x-cv-role` and `x-cv-actor-id` headers for this local preview. These headers are not authentication: demo routes are disabled when `NODE_ENV=production`, and the in-memory sample records reset whenever the API restarts. Do not deploy the demo routes or treat their data as official. Replace the demo repository with the shared Supabase schema, verify Supabase JWTs and app metadata server-side, and enforce RLS before production use.
+
 ## Analysis endpoints
 
 - `GET /health`

@@ -6,6 +6,7 @@ const express = require('express')
 const nodemailer = require('nodemailer')
 const cors = require('cors')
 const { rateLimit } = require('express-rate-limit')
+const portalDemoRouter = require('./portal-demo')
 
 const app = express()
 const port = Number(process.env.PORT) || 3000
@@ -41,6 +42,7 @@ const emailIsValid = (email) => /^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(email)
 const otpHash = (email, code) => crypto.createHmac('sha256', otpSecret).update(`${email}:${code}`).digest('hex')
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }))
+app.use('/api/portal', portalDemoRouter)
 
 app.post('/api/otp/send', async (req, res) => {
   if (!otpSecret) return res.status(503).json({ error: 'OTP_SECRET is missing. Configure backend/.env and restart the API.' })

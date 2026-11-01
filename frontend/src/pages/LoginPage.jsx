@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import handMain from '../assets/login-hand-1.webp'
 import handFinger from '../assets/login-hand-2.webp'
+import { supabase, supabaseConfigured } from '../lib/supabaseClient'
 import './LoginPage.css'
 
 const emailPattern = /^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/
@@ -23,7 +24,7 @@ async function otpRequest(path, payload) {
   return result
 }
 
-export function LoginPage() {
+export function LoginPage({ onAuthenticated }) {
   const [portal, setPortal] = useState('lm')
   const [registering, setRegistering] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
@@ -40,9 +41,11 @@ export function LoginPage() {
   const [verificationToken, setVerificationToken] = useState('')
   const [verificationMessage, setVerificationMessage] = useState('')
   const [verificationState, setVerificationState] = useState('')
+  const [otpPurpose, setOtpPurpose] = useState('registration')
   const [cooldown, setCooldown] = useState(0)
   const [sending, setSending] = useState(false)
   const [confirming, setConfirming] = useState(false)
+  const [signingIn, setSigningIn] = useState(false)
   const [replayKey, setReplayKey] = useState(0)
   const passwordRef = useRef(null)
 
@@ -67,7 +70,7 @@ export function LoginPage() {
     setVerificationState('')
   }
 
-  async function sendCode() {
+  async function sendCode(purpose = 'registration') {
     const normalizedEmail = email.trim().toLowerCase()
     if (!emailPattern.test(normalizedEmail)) {
       setVerificationState('bad')
@@ -75,9 +78,13 @@ export function LoginPage() {
       return
     }
     setSending(true)
+    setOtpPurpose(purpose)
     setVerificationMessage('')
     try {
-      await otpRequest('send', { email: normalizedEmail })
+      if (purpose === 'login' && supabaseConfigured) {
+        const { error } = await supabase.auth.signInWithOtp({ email: normalizedEmail, options: { shouldCreateUser: false } })
+        if (error) throw error
+      } else await otpRequest('send', { email: normalizedEmail })
       setCodeVisible(true)
       setCooldown(30)
       setVerificationState('')
@@ -98,6 +105,22 @@ export function LoginPage() {
     }
     setConfirming(true)
     try {
+      if (otpPurpose === 'login' && supabaseConfigured) {
+        const { data, error } = await supabase.auth.verifyOtp({ email: email.trim().toLowerCase(), token: code.trim(), type: 'email' })
+        if (error) throw error
+        const authRole = data.user?.app_metadata?.role
+        if (!['organisation', 'organization', 'business_owner'].includes(authRole)) {
+          await supabase.auth.signOut()
+          throw new Error('This email is not enabled for the Pre-verification portal.')
+        }
+        setVerified(true)
+        setVerificationToken('supabase-auth')
+        setCodeVisible(false)
+        setCooldown(0)
+        setVerificationState('ok')
+        setVerificationMessage('Email verified. Continue to your dashboard.')
+        return
+      }
       const result = await otpRequest('verify', { email: email.trim().toLowerCase(), code: code.trim() })
       if (!result.ok) {
         setVerificationState('bad')
@@ -118,21 +141,54 @@ export function LoginPage() {
     }
   }
 
-  function submitLogin(event) {
+  async function submitLogin(event) {
     event.preventDefault()
     const data = new FormData(event.currentTarget)
     const userId = String(data.get('userId') || '').trim()
     const password = String(data.get('password') || '')
-    if (!userId || !password) {
-      setLoginMessage(portal === 'lm' ? 'Enter your officer ID and password.' : 'Enter your business email and password.')
-      return
-    }
+    if (!userId || (portal === 'lm' && !password)) { setLoginMessage('Enter your officer ID and password.'); return }
     if (portal === 'pre' && !emailPattern.test(userId)) {
       setLoginMessage('Enter a valid business email.')
       return
     }
+    if (portal === 'pre' && (!verified || otpPurpose !== 'login' || !verificationToken)) {
+      setLoginMessage('Verify your business email with the one-time code before continuing.')
+      return
+    }
+    const nextRole = portal === 'lm'
+      ? (userId.trim().toUpperCase().startsWith('S') ? 'supreme' : 'inspector')
+      : 'organisation'
+    if (portal === 'pre' && verificationToken === 'supabase-auth') {
+      onAuthenticated?.(nextRole, userId.trim())
+      window.location.hash = '/dashboard'
+      return
+    }
+    if (!supabaseConfigured) {
+      onAuthenticated?.(nextRole, userId.trim())
+      window.location.hash = nextRole === 'supreme' ? '/dashboard/supreme' : nextRole === 'inspector' ? '/dashboard/inspector' : '/dashboard'
+      return
+    }
+    setSigningIn(true)
+    const email = portal === 'lm' ? `${userId.trim().toLowerCase()}@lm.complyvision.local` : userId.trim().toLowerCase()
     setLoginMessage('')
-    window.location.hash = '/dashboard'
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+      if (error) throw error
+      const authRole = data.user?.app_metadata?.role
+      const allowedRoles = portal === 'lm'
+        ? ['legal_metrology', 'supreme_authority', 'inspector']
+        : ['organisation', 'organization', 'business_owner']
+      if (!allowedRoles.includes(authRole)) {
+        await supabase.auth.signOut()
+        throw new Error('This account is not enabled for the selected portal.')
+      }
+      onAuthenticated?.(nextRole, userId.trim())
+      window.location.hash = nextRole === 'supreme' ? '/dashboard/supreme' : nextRole === 'inspector' ? '/dashboard/inspector' : '/dashboard'
+    } catch (error) {
+      setLoginMessage(error.message || 'Sign-in failed. Check your credentials and try again.')
+    } finally {
+      setSigningIn(false)
+    }
   }
 
   async function submitRegistration(event) {
@@ -150,7 +206,7 @@ export function LoginPage() {
       })
       const result = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(result.error || 'Registration could not be completed.')
-      setRegistrationMessage('Registration complete. Your email has been verified.')
+      setRegistrationMessage('Your email is verified and this prototype accepted the registration. Account data is currently held only in the API process; durable Supabase registration is pending.')
     } catch (error) {
       setRegistrationMessage(error.message || 'Registration could not be completed.')
     }
@@ -161,7 +217,9 @@ export function LoginPage() {
   const subtitle = registering
     ? 'Verify your business email to get started.'
     : isOfficer ? 'Legal Metrology department officers only.' : 'Check your product labels before inspection.'
-  const note = registering
+  const note = !supabaseConfigured
+    ? 'Preview mode: credentials are not verified. Dashboard actions use temporary sample data until Supabase is connected.'
+    : registering
     ? 'We’ll email you a link to set your password once you are verified.'
     : isOfficer ? 'Government officers only. Every sign in is logged.' : 'For businesses preparing for a Legal Metrology inspection.'
 
@@ -196,19 +254,28 @@ export function LoginPage() {
             <h1>{heading}</h1>
             <p className="login-subtitle">{subtitle}</p>
             <div className="login-portals" role="radiogroup" aria-label="Select your portal">
-              <button type="button" className="login-portal" role="radio" aria-checked={isOfficer} onClick={() => { setPortal('lm'); setRegistering(false); setLoginMessage('') }}><i /><span><strong>Legal Metrology</strong><small>Officer sign in</small></span></button>
-              <button type="button" className="login-portal" role="radio" aria-checked={!isOfficer} onClick={() => { setPortal('pre'); setLoginMessage('') }}><i /><span><strong>Pre-verification</strong><small>For businesses</small></span></button>
+              <button type="button" className="login-portal" role="radio" aria-checked={isOfficer} onClick={() => { setPortal('lm'); setRegistering(false); resetVerification(); setLoginMessage('') }}><i /><span><strong>Legal Metrology</strong><small>Officer sign in</small></span></button>
+              <button type="button" className="login-portal" role="radio" aria-checked={!isOfficer} onClick={() => { setPortal('pre'); setRegistering(false); resetVerification(); setLoginMessage('') }}><i /><span><strong>Pre-verification</strong><small>For businesses</small></span></button>
             </div>
 
             {!registering ? <form onSubmit={submitLogin} noValidate>
               <label htmlFor="login-user">{isOfficer ? 'Officer ID' : 'Business email'}</label>
-              <input id="login-user" name="userId" type={isOfficer ? 'text' : 'email'} autoComplete={isOfficer ? 'username' : 'email'} placeholder={isOfficer ? 'e.g. LM-HR-20418' : 'name@company.com'} />
-              <label htmlFor="login-password">Password</label>
-              <div className="login-password-field"><input ref={passwordRef} id="login-password" name="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" placeholder="Enter your password" onKeyUp={(event) => setCapsLock(event.getModifierState?.('CapsLock') || false)} onBlur={() => setCapsLock(false)} /><button type="button" onClick={() => setShowPassword((show) => !show)} aria-label={`${showPassword ? 'Hide' : 'Show'} password`}>{showPassword ? 'Hide' : 'Show'}</button></div>
-              {capsLock && <div className="login-caps">Caps Lock is on.</div>}
-              <div className="login-row-between"><label className="login-trust"><input type="checkbox" />Trust this device</label><a href="#/login">Forgot password?</a></div>
+              <input id="login-user" name="userId" type={isOfficer ? 'text' : 'email'} value={isOfficer ? undefined : email} onChange={isOfficer ? undefined : (event) => { setEmail(event.target.value); if (verified || codeVisible) resetVerification() }} autoComplete={isOfficer ? 'username' : 'email'} placeholder={isOfficer ? 'e.g. LM-HR-20418' : 'name@company.com'} />
+              {isOfficer && <small className="login-field-hint">Officer IDs starting with S open the Supreme Authority dashboard; other IDs open the Inspector dashboard.</small>}
+              {isOfficer ? <><label htmlFor="login-password">Password</label>
+                <div className="login-password-field"><input ref={passwordRef} id="login-password" name="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" placeholder="Enter your password" onKeyUp={(event) => setCapsLock(event.getModifierState?.('CapsLock') || false)} onBlur={() => setCapsLock(false)} /><button type="button" onClick={() => setShowPassword((show) => !show)} aria-label={`${showPassword ? 'Hide' : 'Show'} password`}>{showPassword ? 'Hide' : 'Show'}</button></div>
+                {capsLock && <div className="login-caps">Caps Lock is on.</div>}
+                <div className="login-row-between"><label className="login-trust"><input type="checkbox" />Trust this device</label><a href="#/login">Forgot password?</a></div>
+              </> : <>
+                <div className="login-code-row"><button className="login-verify-button" type="button" onClick={() => sendCode('login')} disabled={sending || cooldown > 0 || verified}>{sending ? 'Sending…' : cooldown ? `Resend in ${cooldown}s` : codeVisible ? 'Resend code' : 'Send verification code'}</button></div>
+                {codeVisible && <div className="login-code-row login-confirm-row"><input value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); confirmCode() } }} inputMode="numeric" maxLength={6} placeholder="6-digit code" aria-label="Email verification code" autoComplete="one-time-code" /><button className="login-verify-button" type="button" onClick={confirmCode} disabled={confirming}>{confirming ? 'Checking…' : 'Confirm'}</button></div>}
+                <p className={`login-verification-status ${verificationState}`} role="status">{verificationMessage}</p>
+              </>}
               {!isOfficer && <div className="login-alt">New business? <button type="button" onClick={() => { setRegistering(true); setLoginMessage('') }}>Register for pre-verification</button></div>}
-              <button className="login-submit" type="submit">Sign in to {isOfficer ? 'Legal Metrology' : 'Pre-verification'}</button>
+              <button className="login-submit" type="submit" disabled={signingIn || (!isOfficer && !verified)}>{signingIn ? 'Signing in…' : isOfficer ? 'Sign in to Legal Metrology' : 'Continue to Pre-verification'}</button>
+              {import.meta.env.DEV && (isOfficer
+                ? <div className="login-preview-options"><button className="login-preview-button" type="button" onClick={() => { onAuthenticated?.('inspector', 'INSPECTOR-DEMO', true); window.location.hash = '/dashboard/inspector' }}>Preview Inspector dashboard</button><button className="login-preview-button" type="button" onClick={() => { onAuthenticated?.('supreme', 'S-DEMO', true); window.location.hash = '/dashboard/supreme' }}>Preview Supreme Authority dashboard</button></div>
+                : <button className="login-preview-button" type="button" onClick={() => { const previewEmail = email.trim() || 'preview@complyvision.local'; onAuthenticated?.('organisation', previewEmail, true); window.location.hash = '/dashboard' }}>Preview dashboard with sample data</button>)}
               <p className="login-message" role="status">{loginMessage}</p>
             </form> : <form onSubmit={submitRegistration} noValidate>
               <label htmlFor="login-organization">Organization name</label>

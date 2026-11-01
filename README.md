@@ -10,6 +10,58 @@ Product-label information is often small, dense, and difficult to verify manuall
 
 The workspace is designed to make the review understandable: each declaration has a value, extraction confidence, status, applicable rule context, and supporting evidence when available. Reviewers can search and filter declarations, inspect evidence, correct values, flag issues, and export a report.
 
+## Website sections and screenshots
+
+### Homepage and product demo
+
+The public homepage introduces ComplyVision and its accessible label-checking workflow. The product demo lets visitors preview sample results, switch shopper profiles and languages, and hear a spoken summary.
+
+![ComplyVision homepage and product demo](docs/screenshots/complyvision-homepage.png)
+
+### Sign-in and pre-verification
+
+Users choose the Legal Metrology officer portal or the business pre-verification portal. The business flow verifies the user's email with a one-time code. Preview actions are available for local demonstrations.
+
+![Business pre-verification sign-in screen](docs/screenshots/preverification-sign-in.png)
+
+### Inspector dashboard
+
+The inspector dashboard summarizes assigned and recent inspections and links into the review workflow. Preview mode uses sample browser data.
+
+### Supreme Authority dashboard
+
+The Supreme Authority dashboard provides an overview of inspections and cases for authority review, including assignment and status actions available in the current prototype.
+
+### Business pre-verification dashboard
+
+The business dashboard is for submitting product-label checks and following pre-verification history and official case status.
+
+### Inspection workspace
+
+The workspace presents the package image, extracted declarations, rule outcomes, confidence, and review tools together. Reviewers can annotate evidence, correct values, and export results.
+
+### Inspection history
+
+The history page lists saved evaluations in the current browser profile and opens reports for review.
+
+### Accessibility insights
+
+Accessibility insights turns an inspection's extracted values into a spoken summary, with language choices where browser speech support is available.
+
+### Rule management
+
+The rule catalogue supports searching and filtering the prototype rule matrix, with applicability and implementation notes.
+
+### Analytics and reports
+
+Reports present the selected evaluation's rule outcomes, evidence, measurements, and export options.
+
+### Settings and account profile
+
+Settings shows the signed-in account identifier, email when available, portal role, sign-in type, account status, and role scope. Workspace language and summary preferences are saved in the browser.
+
+Screenshots above are the available user-provided captures. The remaining page headings document the site's current sections; fresh full-page captures for authenticated dashboard and review screens have not been added yet.
+
 ## Inspection workflow
 
 1. A reviewer provides an image of a package label.

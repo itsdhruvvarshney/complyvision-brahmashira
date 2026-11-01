@@ -94,4 +94,51 @@ export function ReportsPage({ inspection }) {
   </div>
 }
 
-export function SettingsPage() { const [saved, setSaved] = useState(false); return <div className="page-content"><div className="page-heading"><div><p className="kicker">Workspace preferences</p><h1>Settings</h1><p>Preferences are stored locally in this browser.</p></div></div><section className="panel settings-panel"><label>Display name<input defaultValue="Aviral Singh" /></label><label>Default summary language<select defaultValue="en"><option value="en">English</option><option value="hi">Hindi</option><option value="ta">Tamil</option></select></label><label className="check-row"><input type="checkbox" defaultChecked /> Prefer concise accessibility summaries</label><button className="primary-button" onClick={() => setSaved(true)}>Save preferences</button>{saved && <span className="save-message" role="status">Preferences saved locally.</span>}</section></div> }
+const accountRoles = {
+  supreme: { title: 'Supreme Authority', scope: 'Review authority cases, assign work to inspectors, and monitor case progress.' },
+  inspector: { title: 'Inspector', scope: 'Review assigned inspections and record inspection decisions.' },
+  organisation: { title: 'Business / pre-verification', scope: 'Submit product pre-verification requests and review their status.' },
+}
+
+export function SettingsPage({ user, role = 'inspector' }) {
+  const [saved, setSaved] = useState(false)
+  const [language, setLanguage] = useState(() => localStorage.getItem('cv-summary-language') || 'en')
+  const [concise, setConcise] = useState(() => localStorage.getItem('cv-concise-summaries') !== 'false')
+  const accountId = user?.app_metadata?.login_id || sessionStorage.getItem('cv-actor-id') || user?.email || 'Not available'
+  const email = user?.email || (String(accountId).includes('@') ? accountId : 'Not provided for this sign-in')
+  const fullName = user?.user_metadata?.full_name || user?.user_metadata?.display_name || user?.user_metadata?.name || sessionStorage.getItem('cv-organization') || 'Signed-in user'
+  const preview = sessionStorage.getItem('cv-demo-authenticated') === 'true'
+  const roleInfo = accountRoles[role] || accountRoles.inspector
+  const authStatus = preview ? 'Local preview account' : user ? 'Verified account' : 'Local account'
+  const savePreferences = () => {
+    localStorage.setItem('cv-summary-language', language)
+    localStorage.setItem('cv-concise-summaries', String(concise))
+    setSaved(true)
+  }
+
+  return <div className="page-content">
+    <div className="page-heading"><div><p className="kicker">Account and workspace preferences</p><h1>Settings</h1><p>Review your portal access and manage preferences for this browser.</p></div></div>
+    <div className="settings-layout">
+      <section className="panel settings-account">
+        <div className="settings-section-heading"><div><p className="kicker">Signed-in profile</p><h2>{fullName}</h2><p>Account details associated with this session.</p></div><span className="settings-role-badge">{roleInfo.title}</span></div>
+        <dl className="settings-details">
+          <div><dt>Portal / role</dt><dd>{roleInfo.title}</dd></div>
+          <div><dt>Officer or account ID</dt><dd>{accountId}</dd></div>
+          <div><dt>Email</dt><dd>{email}</dd></div>
+          <div><dt>Sign-in type</dt><dd>{authStatus}</dd></div>
+          <div><dt>Account status</dt><dd><span className="profile-active"><i />Active in this session</span></dd></div>
+          {user?.id && <div><dt>Authentication user ID</dt><dd>{user.id}</dd></div>}
+        </dl>
+        <div className="settings-access"><strong>What this role can do</strong><p>{roleInfo.scope}</p></div>
+        <p className="settings-security-note">Passwords and authentication tokens are never displayed here. To change sign-in credentials, use the account recovery flow provided by your administrator.</p>
+      </section>
+      <section className="panel settings-preferences">
+        <div className="settings-section-heading"><div><p className="kicker">Personalize</p><h2>Workspace preferences</h2><p>These choices are saved in this browser.</p></div></div>
+        <label>Default summary language<select value={language} onChange={(event) => { setLanguage(event.target.value); setSaved(false) }}><option value="en">English</option><option value="hi">Hindi</option><option value="ta">Tamil</option></select></label>
+        <label className="check-row"><input type="checkbox" checked={concise} onChange={(event) => { setConcise(event.target.checked); setSaved(false) }} /> Prefer concise accessibility summaries</label>
+        <button className="primary-button" onClick={savePreferences}>Save preferences</button>
+        {saved && <span className="save-message" role="status">Preferences saved in this browser.</span>}
+      </section>
+    </div>
+  </div>
+}

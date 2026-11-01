@@ -14,7 +14,7 @@ export function Header() {
   return <nav className="site-nav" aria-label="Main navigation">
     <a className="brand" href="#top"><i><CheckMark /></i>ComplyVision</a>
     <div className="nav-actions">
-      <div className="nav-links"><a href="#/dashboard">Dashboard</a><a href="#/workspace">Workspace</a><a href="#/history">History</a><a href="#/insights">Accessibility</a><a href="#/rules">Rules</a><a href="#/reports">Reports</a><a href="#/settings">Settings</a></div>
+      <div className="nav-links"><a href="#/dashboard">Dashboard</a><a href="#/history">History</a><a href="#/rules">Rules</a><a href="#/reports">Reports</a><a href="#/settings">Settings</a></div>
       <button className="icon-button type-button" type="button" aria-pressed={large} aria-label="Larger text" onClick={() => setLarge(!large)}>A+</button>
       <button className="icon-button type-button" type="button" aria-pressed={contrast} aria-label="High contrast" onClick={() => setContrast(!contrast)}>◐</button>
       <button className="icon-button" type="button" aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? '☀' : '☾'}</button>

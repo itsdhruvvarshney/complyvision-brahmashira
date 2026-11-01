@@ -5,7 +5,6 @@ const footerGroups = [
     title: 'Explore',
     links: [
       ['Dashboard', '#/dashboard'],
-      ['Inspection workspace', '#/workspace'],
       ['Rule management', '#/rules'],
       ['Reports and history', '#/reports'],
     ],
