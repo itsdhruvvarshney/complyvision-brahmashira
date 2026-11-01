@@ -89,7 +89,61 @@ registration flow. See the [`web` branch](https://github.com/itsdhruvvarshney/co
 for details.
 
 ---
+# The Website
 
+<div align="center">
+  <h3>Explore the ComplyVision experience</h3>
+  <p><em>A visual tour of the platform's key screens</em></p>
+</div>
+
+<table align="center" cellspacing="18" cellpadding="0">
+  <tr>
+    <td align="center" valign="top">
+      <h4>Public homepage &amp; product demo</h4>
+      <a href="https://github.com/itsdhruvvarshney/complyvision-brahmashira/blob/web/docs/screenshots/complyvision-homepage-full.png">
+        <img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashira/web/docs/screenshots/complyvision-homepage-full.png" alt="ComplyVision homepage and product demo" width="480" loading="lazy">
+      </a>
+    </td>
+    <td align="center" valign="top">
+      <h4>Legal Metrology sign-in</h4>
+      <a href="https://github.com/itsdhruvvarshney/complyvision-brahmashira/blob/web/docs/screenshots/legal-metrology-sign-in.png">
+        <img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashira/web/docs/screenshots/legal-metrology-sign-in.png" alt="Legal Metrology sign-in" width="480" loading="lazy">
+      </a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top">
+      <h4>Inspection history</h4>
+      <a href="https://github.com/itsdhruvvarshney/complyvision-brahmashira/blob/web/docs/screenshots/inspection-history.png">
+        <img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashira/web/docs/screenshots/inspection-history.png" alt="Inspection history" width="480" loading="lazy">
+      </a>
+    </td>
+    <td align="center" valign="top">
+      <h4>Rule management</h4>
+      <a href="https://github.com/itsdhruvvarshney/complyvision-brahmashira/blob/web/docs/screenshots/rule-management.png">
+        <img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashira/web/docs/screenshots/rule-management.png" alt="Rule management" width="480" loading="lazy">
+      </a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top">
+      <h4>Inspection reports</h4>
+      <a href="https://github.com/itsdhruvvarshney/complyvision-brahmashira/blob/web/docs/screenshots/inspection-reports.png">
+        <img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashira/web/docs/screenshots/inspection-reports.png" alt="Inspection reports" width="480" loading="lazy">
+      </a>
+    </td>
+    <td align="center" valign="top">
+      <h4>Inspector dashboard</h4>
+      <a href="https://github.com/itsdhruvvarshney/complyvision-brahmashira/blob/web/docs/screenshots/inspector-dashboard.png">
+        <img src="https://raw.githubusercontent.com/itsdhruvvarshney/complyvision-brahmashira/web/docs/screenshots/inspector-dashboard.png" alt="Inspector dashboard" width="480" loading="lazy">
+      </a>
+    </td>
+  </tr>
+</table>
+
+<br>
+
+---
 ## How it works
 
 ```mermaid
