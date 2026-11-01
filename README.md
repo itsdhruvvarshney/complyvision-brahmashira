@@ -1,26 +1,37 @@
 <div align="center">
 
-# ComplyVision
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:0B1220,45:2563EB,100:22C55E&height=190&section=header&text=ComplyVision&fontSize=60&fontColor=FFFFFF&fontAlignY=38&desc=AI-powered%20regulatory%20compliance%20for%20packaged%20products&descAlignY=62&descSize=18&animation=fadeIn" alt="ComplyVision" width="100%" />
 
-**AI-powered regulatory compliance for packaged products: on the web and in your pocket.**
+<a href="https://github.com/itsdhruvvarshney/complyvision-brahmashira">
+  <img src="https://readme-typing-svg.demolab.com?font=Montserrat&weight=600&size=21&duration=2800&pause=800&color=38BDF8&center=true&vCenter=true&width=780&height=55&lines=Scan+labels.+Detect+violations.+Build+trust.;OCR+%2B+Computer+Vision+%2B+Explainable+AI.;Compliance+intelligence+for+web+and+mobile." alt="Animated ComplyVision tagline" />
+</a>
 
-ComplyVision reads product labels with OCR and computer vision, checks them against Indian regulations
-(Legal Metrology, FSSAI, BIS) with a transparent rule engine, and uses Gemini to double-check and explain the result.
+<br>
 
-[![Android app](https://img.shields.io/badge/Android%20app-app%20branch-3DDC84?logo=android&logoColor=white)](https://github.com/itsdhruvvarshney/complyvision-brahmashira/tree/app)
-[![Web workspace](https://img.shields.io/badge/Web%20workspace-web%20branch-1D4ED8?logo=react&logoColor=white)](https://github.com/itsdhruvvarshney/complyvision-brahmashira/tree/web)
+ ## **The Android app and web platform live in separate branches — select one below to get started.**
+
+<br>
+
+<a href="https://github.com/itsdhruvvarshney/complyvision-brahmashira/tree/app">
+  <img src="https://img.shields.io/badge/📱_EXPLORE_ANDROID-App_branch-22C55E?style=for-the-badge&labelColor=14532D&logo=android&logoColor=white&logoWidth=22" alt="Explore the Android app branch" height="48" />
+</a>
+
+
+
+<a href="https://github.com/itsdhruvvarshney/complyvision-brahmashira/tree/web">
+  <img src="https://img.shields.io/badge/🌐_EXPLORE_WEB-Web_branch-38BDF8?style=for-the-badge&labelColor=172554&logo=react&logoColor=white&logoWidth=22" alt="Explore the web branch" height="48" />
+</a>
+
+<br><br>
+
+ComplyVision reads product labels with **OCR and computer vision**, validates them against  
+**Legal Metrology, FSSAI, and BIS**, then uses **Gemini AI** to double-check and explain the result.
+
+<br>
+
+`OCR` &nbsp;•&nbsp; `Computer Vision` &nbsp;•&nbsp; `Rule Engine` &nbsp;•&nbsp; `Gemini AI` &nbsp;•&nbsp; `Indian Compliance`
 
 </div>
-
----
-
-## Explore the project
-
-| | Branch | What you will find |
-| --- | --- | --- |
-| 📱 | **[`app`](https://github.com/itsdhruvvarshney/complyvision-brahmashira/tree/app)** | The Android app (Kotlin, Jetpack Compose), the FastAPI analyzer service with the OCR, vision, rule-engine and Gemini pipeline, the Supabase SQL modules, and the organisation registration and reset pages. |
-| 🌐 | **[`web`](https://github.com/itsdhruvvarshney/complyvision-brahmashira/tree/web)** | The web workspace: a React inspection workspace, a FastAPI analysis service and an Express OTP account API. |
-
 ---
 
 ## The problem
