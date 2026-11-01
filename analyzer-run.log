@@ -1,0 +1,27 @@
+INFO:     Started server process [42680]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-11-01 05:06:17,106 INFO analyzer.ocr: Loading PaddleOCR 3.7.0 (lang=en)
+C:\Users\harsh\AndroidStudioProjects\ComplyVision\analyzer\app\ocr\engine.py:84: UserWarning: `lang` and `ocr_version` will be ignored when model names or model directories are not `None`.
+  self._ocr = PaddleOCR(
+INFO:     127.0.0.1:49655 - "GET /health HTTP/1.1" 200 OK
+INFO: Could not find files for the given pattern(s).
+C:\Users\harsh\AndroidStudioProjects\ComplyVision\analyzer\.venv\Lib\site-packages\paddle\utils\cpp_extension\extension_utils.py:712: UserWarning: No ccache found. Please be aware that recompiling all source files may be required. You can download and install ccache from: https://github.com/ccache/ccache/blob/master/doc/INSTALL.md
+  warnings.warn(warning_message)
+[32mCreating model: ('PP-LCNet_x1_0_textline_ori', None, None)[0m
+[32mModel files already exist. Using cached files. To redownload, please delete the directory manually: `C:\Users\harsh\.paddlex\official_models\PP-LCNet_x1_0_textline_ori`.[0m
+[32mCreating model: ('PP-OCRv5_mobile_det', None, None)[0m
+[32mModel files already exist. Using cached files. To redownload, please delete the directory manually: `C:\Users\harsh\.paddlex\official_models\PP-OCRv5_mobile_det`.[0m
+[32mCreating model: ('en_PP-OCRv5_mobile_rec', None, None)[0m
+[32mModel files already exist. Using cached files. To redownload, please delete the directory manually: `C:\Users\harsh\.paddlex\official_models\en_PP-OCRv5_mobile_rec`.[0m
+[32mModel files already exist. Using cached files. To redownload, please delete the directory manually: `C:\Users\harsh\.paddlex\official_models\PP-OCRv6_medium_rec`.[0m
+2026-11-01 05:06:19,676 INFO analyzer: OCR engine ready ({'detector': 'PP-OCRv5_mobile_det', 'recogniser': 'en_PP-OCRv5_mobile_rec', 'verifier': 'PP-OCRv6_medium_rec'})
+INFO:     127.0.0.1:49657 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49707 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62378 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58521 - "GET /health HTTP/1.1" 200 OK
+2026-11-01 05:32:07,848 INFO analyzer: Analysed CV-26-00228: FAIL in 30293 ms
+INFO:     127.0.0.1:58522 - "POST /analyze HTTP/1.1" 200 OK
+2026-11-01 05:34:33,388 INFO analyzer: Analysed CV-26-00228: FAIL in 35945 ms
+INFO:     127.0.0.1:51637 - "POST /analyze HTTP/1.1" 200 OK

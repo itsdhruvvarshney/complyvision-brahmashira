@@ -8,12 +8,14 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
+import numpy as np
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -34,10 +36,16 @@ executor = ThreadPoolExecutor(max_workers=settings.workers, thread_name_prefix="
 _started = time.time()
 
 
+def _engine():
+    det, rec, ver = settings.ocr_models
+    return get_engine(settings.ocr_lang, settings.ocr_mkldnn, settings.ocr_det_limit, det, rec, ver)
+
+
 def _warm_up() -> None:
     try:
-        get_engine(settings.ocr_lang, settings.ocr_mkldnn)
-        log.info("OCR engine ready")
+        engine = _engine()
+        engine.recognize(np.full((48, 160, 3), 255, np.uint8))  # loads the verification model as well
+        log.info("OCR engine ready (%s)", engine.models)
     except OcrUnavailable as exc:
         log.error("OCR engine unavailable: %s", exc)
 
@@ -105,7 +113,7 @@ async def analyze_endpoint(
     await image.close()
 
     try:
-        engine = get_engine(settings.ocr_lang, settings.ocr_mkldnn)
+        engine = _engine()
     except OcrUnavailable as exc:
         raise HTTPException(status_code=503, detail={"code": "ocr_unavailable", "message": str(exc)})
 
@@ -114,9 +122,11 @@ async def analyze_endpoint(
                "source": source}
     loop = asyncio.get_running_loop()
     try:
+        deadline = time.monotonic() + settings.request_timeout_s
         report = await asyncio.wait_for(
-            loop.run_in_executor(executor, analyze, data, image.filename, image.content_type, context,
-                                 engine, gemini, settings, RULES),
+            loop.run_in_executor(executor, functools.partial(
+                analyze, data, image.filename, image.content_type, context, engine, gemini, settings, RULES,
+                deadline=deadline)),
             timeout=settings.request_timeout_s,
         )
     except ImageValidationError as exc:

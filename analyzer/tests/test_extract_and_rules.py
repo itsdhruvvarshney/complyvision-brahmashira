@@ -116,3 +116,11 @@ def test_parsers():
 def test_ocr_digit_confusions_are_tolerated():
     d = extract(lines_of("MRP Rs. 1O5.5O incl. of all taxes"), {}, TODAY)
     assert d["mrp"]["value"] == 105.5
+
+
+def test_use_before_duration_and_rupee_misreads():
+    d = extract(lines_of("Use before 36 months from manufacture", "Mfd. 09/2026", "MRP < 120.00 (incl. of all taxes)",
+                         "Unit Sale Price: 2 30.00 per 100 ml"), {}, TODAY)
+    assert d["best_before"]["iso"] == "2029-09"
+    assert d["mrp"]["value"] == 120.0 and d["mrp"]["currency_symbol"]
+    assert d["unit_sale_price"]["value"] == 30.0

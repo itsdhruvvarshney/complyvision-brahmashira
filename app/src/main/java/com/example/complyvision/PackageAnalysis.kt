@@ -334,7 +334,9 @@ data class ValidatedImage(
     val fileName: String,
     val width: Int,
     val height: Int,
-    val preview: Bitmap
+    val preview: Bitmap,
+    /** How the image was prepared on the phone (crop / resize), shown on the check screen */
+    val note: String = ""
 ) {
     val sizeLabel: String get() = String.format(Locale.US, "%.2f MB", bytes.size / 1048576.0)
 }
@@ -437,6 +439,72 @@ object ImageValidator {
         return ImageCheck.Valid(ValidatedImage(bytes, mime, "$base.$ext", bounds.outWidth, bounds.outHeight, preview))
     }
 
+    private fun exifDegrees(bytes: ByteArray): Int = try {
+        when (ExifInterface(ByteArrayInputStream(bytes)).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> 90
+            ExifInterface.ORIENTATION_ROTATE_180 -> 180
+            ExifInterface.ORIENTATION_ROTATE_270 -> 270
+            else -> 0
+        }
+    } catch (_: Exception) {
+        0
+    }
+
+    /**
+     * Crops a validated image to [crop] (in upright, EXIF-rotated pixel coordinates; null = whole image)
+     * and limits its longest side to [maxSide], re-encoding as an upright JPEG. Only the needed region
+     * is decoded, so full-resolution camera photos never have to fit in memory. Returns the input
+     * unchanged when nothing needs to change.
+     */
+    fun optimize(image: ValidatedImage, crop: ((Int, Int) -> android.graphics.Rect)?, maxSide: Int = 2400): ValidatedImage {
+        val deg = exifDegrees(image.bytes)
+        val w = image.width
+        val h = image.height
+        val rw = if (deg % 180 == 0) w else h
+        val rh = if (deg % 180 == 0) h else w
+        val r = crop?.invoke(rw, rh)?.let {
+            android.graphics.Rect(it.left.coerceIn(0, rw - 1), it.top.coerceIn(0, rh - 1), it.right.coerceIn(1, rw), it.bottom.coerceIn(1, rh))
+        }?.takeIf { it.width() >= MIN_SIDE / 2 && it.height() >= MIN_SIDE / 2 } ?: android.graphics.Rect(0, 0, rw, rh)
+        val cropped = r.width() < rw || r.height() < rh
+        if (!cropped && maxOf(rw, rh) <= maxSide && deg == 0) return image
+
+        // Map the upright rectangle back onto the stored (un-rotated) pixels
+        val src = when (deg) {
+            90 -> android.graphics.Rect(r.top, h - r.right, r.bottom, h - r.left)
+            180 -> android.graphics.Rect(w - r.right, h - r.bottom, w - r.left, h - r.top)
+            270 -> android.graphics.Rect(w - r.bottom, r.left, w - r.top, r.right)
+            else -> r
+        }
+        var sample = 1
+        while (maxOf(src.width(), src.height()) / (sample * 2) >= maxSide) sample *= 2
+        @Suppress("DEPRECATION")
+        val region = try {
+            android.graphics.BitmapRegionDecoder.newInstance(image.bytes, 0, image.bytes.size, false)
+                ?.decodeRegion(src, BitmapFactory.Options().apply { inSampleSize = sample })
+        } catch (_: Exception) {
+            null
+        } ?: return image
+
+        var out = if (deg != 0) Bitmap.createBitmap(region, 0, 0, region.width, region.height, Matrix().apply { postRotate(deg.toFloat()) }, true) else region
+        val long = maxOf(out.width, out.height)
+        if (long > maxSide) {
+            val s = maxSide.toFloat() / long
+            out = Bitmap.createScaledBitmap(out, (out.width * s).toInt(), (out.height * s).toInt(), true)
+        }
+        val buf = ByteArrayOutputStream()
+        out.compress(Bitmap.CompressFormat.JPEG, 92, buf)
+        val bytes = buf.toByteArray()
+        val previewBmp = if (maxOf(out.width, out.height) > 1080) {
+            val s = 1080f / maxOf(out.width, out.height)
+            Bitmap.createScaledBitmap(out, (out.width * s).toInt(), (out.height * s).toInt(), true)
+        } else out
+        val note = buildList {
+            if (cropped) add("cropped to the frame from ${rw}×${rh}")
+            else if (long > maxSide) add("resized from ${rw}×${rh}")
+        }.joinToString(", ")
+        return ValidatedImage(bytes, "image/jpeg", image.fileName.substringBeforeLast('.') + ".jpg", out.width, out.height, previewBmp, note)
+    }
+
     private fun applyExifRotation(bitmap: Bitmap, bytes: ByteArray): Bitmap {
         val degrees = try {
             when (ExifInterface(ByteArrayInputStream(bytes)).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
@@ -467,14 +535,54 @@ data class AnalyzerHealth(val ok: Boolean, val version: String, val ocrReady: Bo
 
 object AnalyzerClient {
     private const val CONNECT_TIMEOUT_MS = 10_000
-    private const val READ_TIMEOUT_MS = 150_000
+    private const val READ_TIMEOUT_MS = 180_000
+    private const val PREFS = "analyzer"
+    private const val KEY_URL = "url"
 
-    val baseUrl: String get() = BuildConfig.ANALYZER_URL.trim().trimEnd('/')
-    val isConfigured: Boolean get() = baseUrl.isNotEmpty()
+    private var prefs: android.content.SharedPreferences? = null
 
-    private fun open(path: String): HttpURLConnection {
-        if (!isConfigured) throw AnalyzerException(AnalyzerFailure.NOT_CONFIGURED, "The analyzer address is not set (analyzer.url in local.properties).")
-        val c = URL("$baseUrl$path").openConnection() as HttpURLConnection
+    /** The address that last answered /health (null until one does) */
+    @Volatile private var active: String? = null
+
+    fun init(context: Context) {
+        if (prefs == null) prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    }
+
+    private val isEmulator: Boolean by lazy {
+        android.os.Build.FINGERPRINT.contains("generic") || android.os.Build.HARDWARE.contains("ranchu") ||
+            android.os.Build.HARDWARE.contains("goldfish") || android.os.Build.PRODUCT.contains("sdk")
+    }
+
+    private fun normalise(url: String?): String? =
+        url?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }?.let { if ("://" in it) it else "http://$it" }
+
+    /** Address typed in the app (overrides the build configuration) */
+    var savedUrl: String?
+        get() = normalise(prefs?.getString(KEY_URL, null))
+        set(value) {
+            prefs?.edit()?.apply { if (value.isNullOrBlank()) remove(KEY_URL) else putString(KEY_URL, normalise(value)) }?.apply()
+            active = null
+        }
+
+    /**
+     * Addresses to try, in order: the one saved in the app, the build's analyzer.url, then the USB
+     * `adb reverse tcp:8000 tcp:8000` loopback on a real phone or the emulator's alias for the PC.
+     * 10.0.2.2 only exists inside the emulator, so it is skipped on real phones.
+     */
+    val candidates: List<String>
+        get() {
+            val configured = normalise(BuildConfig.ANALYZER_URL)?.takeUnless { !isEmulator && "10.0.2.2" in it }
+            return listOfNotNull(
+                savedUrl, configured,
+                if (isEmulator) "http://10.0.2.2:8000" else "http://127.0.0.1:8000"
+            ).distinct()
+        }
+
+    val baseUrl: String get() = active ?: candidates.firstOrNull().orEmpty()
+    val isConfigured: Boolean get() = candidates.isNotEmpty()
+
+    private fun open(base: String, path: String): HttpURLConnection {
+        val c = URL("$base$path").openConnection() as HttpURLConnection
         c.connectTimeout = CONNECT_TIMEOUT_MS
         c.readTimeout = READ_TIMEOUT_MS
         c.setRequestProperty("Accept", "application/json")
@@ -482,8 +590,33 @@ object AnalyzerClient {
         return c
     }
 
+    /** Finds the first candidate address that answers /health quickly */
+    private fun resolve(): String {
+        active?.let { return it }
+        for (base in candidates) {
+            val c = try { open(base, "/health") } catch (_: Exception) { continue }
+            try {
+                c.connectTimeout = 2_500
+                c.readTimeout = 4_000
+                if (c.responseCode == 200) {
+                    active = base
+                    return base
+                }
+            } catch (_: Exception) {
+            } finally {
+                c.disconnect()
+            }
+        }
+        throw AnalyzerException(
+            AnalyzerFailure.OFFLINE,
+            "Cannot reach the analyzer (tried ${candidates.joinToString(", ")}). Start it on the PC, then either connect the phone " +
+                "by USB and run \"adb reverse tcp:8000 tcp:8000\", or set the PC's Wi-Fi address from the menu → Analyzer server."
+        )
+    }
+
     suspend fun health(): AnalyzerHealth = withContext(Dispatchers.IO) {
-        val c = open("/health")
+        active = null
+        val c = open(resolve(), "/health")
         try {
             c.connectTimeout = 5_000
             c.readTimeout = 8_000
@@ -520,7 +653,7 @@ object AnalyzerClient {
             val tailBytes = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
             val total = headBytes.size.toLong() + image.bytes.size + tailBytes.size
 
-            val c = open("/analyze")
+            val c = open(resolve(), "/analyze")
             try {
                 c.requestMethod = "POST"
                 c.doOutput = true
@@ -576,9 +709,17 @@ object AnalyzerClient {
     }
 
     private fun translate(e: Exception): AnalyzerException = when (e) {
-        is SocketTimeoutException -> AnalyzerException(AnalyzerFailure.TIMEOUT, "The analyzer did not respond in time. Check the connection and retry.")
-        is UnknownHostException, is ConnectException ->
+        is SocketTimeoutException ->
+            if (e.message.orEmpty().contains("connect", ignoreCase = true)) {
+                active = null
+                AnalyzerException(AnalyzerFailure.OFFLINE, "Cannot connect to the analyzer at $baseUrl. Check that the PC and phone are connected and retry.")
+            } else {
+                AnalyzerException(AnalyzerFailure.TIMEOUT, "The analyzer at $baseUrl took longer than ${READ_TIMEOUT_MS / 1000} s. It may still be loading OCR models - retry in a moment.")
+            }
+        is UnknownHostException, is ConnectException -> {
+            active = null
             AnalyzerException(AnalyzerFailure.OFFLINE, "Cannot reach the analyzer at $baseUrl. Make sure the service is running and reachable from this phone.")
+        }
         is IOException -> AnalyzerException(AnalyzerFailure.OFFLINE, "Network error while talking to the analyzer: ${e.message ?: "connection lost"}")
         else -> AnalyzerException(AnalyzerFailure.SERVER, e.message ?: "Unexpected analyzer error.")
     }

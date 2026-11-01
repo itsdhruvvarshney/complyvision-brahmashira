@@ -44,6 +44,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.semantics.Role
@@ -78,6 +80,29 @@ private sealed interface SaveState {
     data class Error(val message: String) : SaveState
 }
 
+/** Label guide frame, as fractions of the viewfinder (the photo is cropped to the same area) */
+private const val GUIDE_W = 0.84f
+private const val GUIDE_H = 0.46f
+private const val GUIDE_TOP = 0.2f
+private const val GUIDE_MARGIN = 0.04f
+
+/**
+ * Maps the on-screen guide frame onto the captured photo. The preview is FILL_CENTER, so it shows only
+ * the central part of the sensor image; the visible region is worked out from the view and photo sizes.
+ */
+private fun guideCrop(view: IntSize): (Int, Int) -> android.graphics.Rect = { w, h ->
+    val scale = maxOf(view.width.toFloat() / w, view.height.toFloat() / h)
+    val visW = view.width / scale
+    val visH = view.height / scale
+    val offX = (w - visW) / 2f
+    val offY = (h - visH) / 2f
+    val gw = GUIDE_W + 2 * GUIDE_MARGIN
+    val gh = GUIDE_H + 2 * GUIDE_MARGIN
+    val left = offX + visW * (1f - gw) / 2f
+    val top = offY + visH * (GUIDE_TOP - GUIDE_MARGIN)
+    android.graphics.Rect(left.toInt(), top.toInt(), (left + visW * gw).toInt(), (top + visH * gh).toInt())
+}
+
 /** The analyzer stages, in the order the FastAPI service runs them */
 private val AnalyzerStages = listOf(
     "MIME & integrity validation",
@@ -109,10 +134,17 @@ fun PackageScanScreen(
     var uploaded by remember { mutableFloatStateOf(0f) }
     var sessionCount by remember { mutableIntStateOf(0) }
 
-    fun accept(check: ImageCheck, source: String) {
-        stage = when (check) {
-            is ImageCheck.Valid -> ScanStage.Ready(check.image, source)
-            is ImageCheck.Invalid -> ScanStage.Failed(check.message, null, source, retryable = false)
+    /** MIME-validates the original, then crops / resizes it on the phone before upload */
+    fun accept(check: ImageCheck, source: String, crop: ((Int, Int) -> android.graphics.Rect)? = null) {
+        when (check) {
+            is ImageCheck.Valid -> {
+                stage = ScanStage.Checking
+                scope.launch {
+                    val ready = withContext(Dispatchers.Default) { ImageValidator.optimize(check.image, crop) }
+                    stage = ScanStage.Ready(ready, source)
+                }
+            }
+            is ImageCheck.Invalid -> stage = ScanStage.Failed(check.message, null, source, retryable = false)
         }
     }
 
@@ -178,9 +210,12 @@ fun PackageScanScreen(
             ScanStage.Capture -> CaptureView(
                 case = case,
                 sessionCount = sessionCount,
-                onCaptured = { bytes ->
+                onCaptured = { bytes, view ->
                     stage = ScanStage.Checking
-                    scope.launch { accept(withContext(Dispatchers.Default) { ImageValidator.checkBytes(bytes, "capture.jpg", "image/jpeg") }, "Camera") }
+                    scope.launch {
+                        val check = withContext(Dispatchers.Default) { ImageValidator.checkBytes(bytes, "capture.jpg", "image/jpeg") }
+                        accept(check, "Camera", if (view.width > 0 && view.height > 0) guideCrop(view) else null)
+                    }
                 },
                 onCaptureError = { stage = ScanStage.Failed(it, null, "Camera", retryable = false) },
                 onGallery = ::pickFromGallery,
@@ -229,7 +264,7 @@ fun PackageScanScreen(
 private fun CaptureView(
     case: MyCase,
     sessionCount: Int,
-    onCaptured: (ByteArray) -> Unit,
+    onCaptured: (ByteArray, IntSize) -> Unit,
     onCaptureError: (String) -> Unit,
     onGallery: () -> Unit,
     onClose: () -> Unit
@@ -249,12 +284,64 @@ private fun CaptureView(
             .build()
     }
     var camera by remember { mutableStateOf<Camera?>(null) }
+    var previewView by remember { mutableStateOf<PreviewView?>(null) }
+    var viewSize by remember { mutableStateOf(IntSize.Zero) }
     var torch by remember { mutableStateOf(false) }
     var shooting by remember { mutableStateOf(false) }
+    var focusing by remember { mutableStateOf(false) }
 
-    Box(Modifier.fillMaxSize()) {
+    fun capture() {
+        val file = File(context.cacheDir, "scan_${System.currentTimeMillis()}.jpg")
+        imageCapture.takePicture(
+            ImageCapture.OutputFileOptions.Builder(file).build(),
+            ContextCompat.getMainExecutor(context),
+            object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                    val bytes = try { file.readBytes() } catch (_: Exception) { null }
+                    file.delete()
+                    shooting = false
+                    camera?.cameraControl?.cancelFocusAndMetering()
+                    if (bytes != null) onCaptured(bytes, viewSize) else onCaptureError("The photo could not be saved. Please try again.")
+                }
+
+                override fun onError(exception: ImageCaptureException) {
+                    file.delete()
+                    shooting = false
+                    camera?.cameraControl?.cancelFocusAndMetering()
+                    onCaptureError("The camera could not take the photo (${exception.imageCaptureError}). Please try again.")
+                }
+            }
+        )
+    }
+
+    // Focus and expose on the label (centre of the guide frame) before the shutter fires
+    fun shoot() {
+        shooting = true
+        val cam = camera
+        val pv = previewView
+        if (cam == null || pv == null || viewSize == IntSize.Zero) {
+            capture()
+            return
+        }
+        focusing = true
+        var fired = false
+        val fire = {
+            if (!fired) {
+                fired = true
+                focusing = false
+                capture()
+            }
+        }
+        val point = pv.meteringPointFactory.createPoint(viewSize.width / 2f, viewSize.height * (GUIDE_TOP + GUIDE_H / 2f), 0.3f)
+        val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+            .disableAutoCancel().build()
+        cam.cameraControl.startFocusAndMetering(action).addListener({ fire() }, ContextCompat.getMainExecutor(context))
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ fire() }, 1800)
+    }
+
+    Box(Modifier.fillMaxSize().onSizeChanged { viewSize = it }) {
         if (granted) {
-            CameraPreview(imageCapture, Modifier.fillMaxSize()) { camera = it }
+            CameraPreview(imageCapture, Modifier.fillMaxSize()) { cam, view -> camera = cam; previewView = view }
             GuideOverlay()
         } else {
             Column(
@@ -301,7 +388,8 @@ private fun CaptureView(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                "Fit the full label inside the frame. Avoid direct glare; tilt is corrected automatically.\nPlace the 20 mm ArUco card beside the pack to measure numeral height.",
+                if (focusing) "Focusing on the label…"
+                else "Fill the frame with the label - only the area inside it is analysed. Hold steady, avoid glare.\nKeep the 20 mm ArUco card inside the frame to measure numeral height.",
                 color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp, lineHeight = 16.sp, textAlign = TextAlign.Center,
                 modifier = Modifier.padding(horizontal = 24.dp)
             )
@@ -315,28 +403,7 @@ private fun CaptureView(
                     Modifier.size(78.dp).clip(CircleShape).border(4.dp, Color.White, CircleShape).padding(7.dp).clip(CircleShape)
                         .background(if (granted && !shooting) Color.White else Color.White.copy(alpha = 0.4f))
                         .semantics { contentDescription = "Capture package photo" }
-                        .clickable(enabled = granted && !shooting, role = Role.Button) {
-                            shooting = true
-                            val file = File(context.cacheDir, "scan_${System.currentTimeMillis()}.jpg")
-                            imageCapture.takePicture(
-                                ImageCapture.OutputFileOptions.Builder(file).build(),
-                                ContextCompat.getMainExecutor(context),
-                                object : ImageCapture.OnImageSavedCallback {
-                                    override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                                        val bytes = try { file.readBytes() } catch (_: Exception) { null }
-                                        file.delete()
-                                        shooting = false
-                                        if (bytes != null) onCaptured(bytes) else onCaptureError("The photo could not be saved. Please try again.")
-                                    }
-
-                                    override fun onError(exception: ImageCaptureException) {
-                                        file.delete()
-                                        shooting = false
-                                        onCaptureError("The camera could not take the photo (${exception.imageCaptureError}). Please try again.")
-                                    }
-                                }
-                            )
-                        },
+                        .clickable(enabled = granted && !shooting, role = Role.Button) { shoot() },
                     contentAlignment = Alignment.Center
                 ) {
                     if (shooting) CircularProgressIndicator(color = AC.Blue, strokeWidth = 3.dp, modifier = Modifier.size(30.dp))
@@ -348,7 +415,7 @@ private fun CaptureView(
 }
 
 @Composable
-private fun CameraPreview(imageCapture: ImageCapture, modifier: Modifier, onCamera: (Camera) -> Unit) {
+private fun CameraPreview(imageCapture: ImageCapture, modifier: Modifier, onCamera: (Camera, PreviewView) -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val previewView = remember {
@@ -369,7 +436,7 @@ private fun CameraPreview(imageCapture: ImageCapture, modifier: Modifier, onCame
                 provider?.unbindAll()
                 provider?.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageCapture)?.let {
                     camera = it
-                    onCamera(it)
+                    onCamera(it, previewView)
                 }
             } catch (_: Exception) {
                 // No back camera / camera in use: the gallery upload remains available
@@ -394,10 +461,10 @@ private fun GuideOverlay() {
     val transition = rememberInfiniteTransition(label = "scanLine")
     val sweep by transition.animateFloat(0f, 1f, infiniteRepeatable(tween(2200, easing = LinearEasing), RepeatMode.Reverse), label = "sweep")
     Canvas(Modifier.fillMaxSize()) {
-        val w = size.width * 0.84f
-        val h = size.height * 0.46f
+        val w = size.width * GUIDE_W
+        val h = size.height * GUIDE_H
         val left = (size.width - w) / 2
-        val top = size.height * 0.2f
+        val top = size.height * GUIDE_TOP
         val dim = Color(0x88000000)
         drawRect(dim, Offset.Zero, androidx.compose.ui.geometry.Size(size.width, top))
         drawRect(dim, Offset(0f, top + h), androidx.compose.ui.geometry.Size(size.width, size.height - top - h))
@@ -449,7 +516,8 @@ private fun ReadyView(image: ValidatedImage, source: String, onRetake: () -> Uni
             AIconView(AIcon.SHIELD, AC.Green, Modifier.size(20.dp))
             Spacer(Modifier.width(10.dp))
             Text(
-                "MIME validated: ${image.mime} • ${image.width}×${image.height}px • ${image.sizeLabel} • $source",
+                "MIME validated • sending ${image.mime} ${image.width}×${image.height}px • ${image.sizeLabel} • $source" +
+                    if (image.note.isNotBlank()) "\nPrepared on the phone: ${image.note}" else "",
                 color = Color.White, fontSize = 12.sp, lineHeight = 16.sp
             )
         }

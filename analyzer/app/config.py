@@ -50,7 +50,7 @@ class Settings:
     api_keys: frozenset[str] = field(default_factory=lambda: frozenset(_list("ANALYZER_API_KEYS")))
     max_upload_mb: int = field(default_factory=lambda: _int("MAX_UPLOAD_MB", 10))
     workers: int = field(default_factory=lambda: max(1, _int("ANALYZER_WORKERS", 2)))
-    request_timeout_s: float = field(default_factory=lambda: _float("REQUEST_TIMEOUT_S", 120.0))
+    request_timeout_s: float = field(default_factory=lambda: _float("REQUEST_TIMEOUT_S", 170.0))
 
     # Request workspace
     workspace_root: str = field(default_factory=lambda: os.getenv(
@@ -69,6 +69,30 @@ class Settings:
     warm_up_ocr: bool = field(default_factory=lambda: _bool("WARM_UP_OCR", True))
     # Paddle 3.x's oneDNN CPU backend fails on Windows ("ConvertPirAttribute2RuntimeAttribute"); off there by default
     ocr_mkldnn: bool = field(default_factory=lambda: _bool("OCR_MKLDNN", os.name != "nt"))
+    # Longest side the text detector sees. Phone photos are 3000-4000 px; detecting at full size is
+    # several times slower on CPU without improving label-sized text.
+    ocr_det_limit: int = field(default_factory=lambda: _int("OCR_DET_LIMIT", 1600))
+    # "fast": mobile detector + recognizer for the full label, then price / quantity / date lines are
+    # re-read with the medium recognizer (about 4x faster on CPU). "accurate": medium models throughout.
+    # Defaults to fast where Paddle's oneDNN acceleration is off (Windows).
+    ocr_profile: str = field(default_factory=lambda: os.getenv("OCR_PROFILE", "accurate" if _bool("OCR_MKLDNN", os.name != "nt") else "fast"))
+    # Explicit model names override the profile
+    ocr_det_model: str | None = field(default_factory=lambda: os.getenv("OCR_DET_MODEL") or None)
+    ocr_rec_model: str | None = field(default_factory=lambda: os.getenv("OCR_REC_MODEL") or None)
+    ocr_verify_model: str | None = field(default_factory=lambda: os.getenv("OCR_VERIFY_MODEL") or None)
+    # Re-read as orientations / native-resolution tiles when a mandatory declaration was not found
+    ocr_rescue: bool = field(default_factory=lambda: _bool("OCR_RESCUE", True))
+    # Most lines re-read per package (critical lines first)
+    ocr_verify_max: int = field(default_factory=lambda: _int("OCR_VERIFY_MAX", 10))
+
+    @property
+    def ocr_models(self) -> tuple[str | None, str | None, str | None]:
+        """(detector, recogniser, verifier) model names; None = PaddleOCR's default."""
+        if self.ocr_profile == "fast":
+            det, rec, ver = "PP-OCRv5_mobile_det", "en_PP-OCRv5_mobile_rec", "PP-OCRv6_medium_rec"
+        else:
+            det, rec, ver = None, None, None
+        return self.ocr_det_model or det, self.ocr_rec_model or rec, self.ocr_verify_model or ver
 
     # Gemini (pool of keys, rotated round-robin with cool-down on quota / server errors)
     gemini_keys: list[str] = field(default_factory=lambda: _list("GEMINI_API_KEYS"))

@@ -59,7 +59,8 @@ def _box_from_poly(poly) -> tuple[tuple[int, int, int, int], list[list[int]]]:
 class PaddleEngine:
     """Thin adapter over PaddleOCR that returns [OcrLine] sorted in reading order."""
 
-    def __init__(self, lang: str = "en", mkldnn: bool = True):
+    def __init__(self, lang: str = "en", mkldnn: bool = True, det_limit: int = 1600,
+                 det_model: str | None = None, rec_model: str | None = None, verify_model: str | None = None):
         try:
             import paddleocr  # noqa: F401
             from paddleocr import PaddleOCR
@@ -73,6 +74,10 @@ class PaddleEngine:
         self._lock = threading.Lock()
         self._recognizer = None
         self.mkldnn = mkldnn
+        self.rec_model = rec_model
+        self.verify_model = verify_model
+        self.models = {"detector": det_model or "default", "recogniser": rec_model or "default",
+                       "verifier": verify_model or rec_model or "default"}
 
         log.info("Loading PaddleOCR %s (lang=%s)", self.version, lang)
         if self.major >= 3:
@@ -82,6 +87,10 @@ class PaddleEngine:
                 use_doc_unwarping=False,  # OpenCV already rectified the image
                 use_textline_orientation=True,
                 enable_mkldnn=mkldnn,
+                text_det_limit_side_len=det_limit,
+                text_det_limit_type="max",
+                **({"text_detection_model_name": det_model} if det_model else {}),
+                **({"text_recognition_model_name": rec_model} if rec_model else {}),
             )
         else:  # pragma: no cover - 2.x API
             self._ocr = PaddleOCR(lang=lang, use_angle_cls=True, show_log=False)
@@ -119,24 +128,35 @@ class PaddleEngine:
                     lines.append(OcrLine(str(text).strip(), float(score), box, pts))
         return sort_reading_order(lines)
 
-    def recognize(self, crop: np.ndarray) -> tuple[str, float]:
-        """Recognition only (no detection) on a tight crop - used for conditional verification."""
+    @property
+    def verifier_is_stronger(self) -> bool:
+        """True when verification re-reads with a more accurate model than the main pass."""
+        return bool(self.verify_model) and self.verify_model != self.rec_model
+
+    def recognize_batch(self, crops: list[np.ndarray]) -> list[tuple[str, float]]:
+        """Recognition only (no detection) on tight crops, in one batched call - used for verification."""
+        if not crops:
+            return []
         with self._lock:
             if self.major >= 3:
                 if self._recognizer is None:
                     from paddleocr import TextRecognition
 
-                    self._recognizer = TextRecognition(enable_mkldnn=self.mkldnn)
-                out = self._recognizer.predict(crop)
-                for res in out or []:
+                    model = self.verify_model or self.rec_model
+                    self._recognizer = TextRecognition(enable_mkldnn=self.mkldnn, **({"model_name": model} if model else {}))
+                out = []
+                for res in self._recognizer.predict(crops, batch_size=8) or []:
                     data = res.json.get("res", res) if hasattr(res, "json") else res
-                    return str(data.get("rec_text", "")).strip(), float(data.get("rec_score", 0.0))
-                return "", 0.0
-            res = self._ocr.ocr(crop, det=False, cls=True)  # pragma: no cover
-            if res and res[0]:
-                text, score = res[0][0]
-                return str(text).strip(), float(score)
-            return "", 0.0
+                    out.append((str(data.get("rec_text", "")).strip(), float(data.get("rec_score", 0.0))))
+                return out + [("", 0.0)] * (len(crops) - len(out))
+            results = []  # pragma: no cover - 2.x API
+            for crop in crops:
+                res = self._ocr.ocr(crop, det=False, cls=True)
+                results.append((str(res[0][0][0]).strip(), float(res[0][0][1])) if res and res[0] else ("", 0.0))
+            return results
+
+    def recognize(self, crop: np.ndarray) -> tuple[str, float]:
+        return self.recognize_batch([crop])[0]
 
 
 def sort_reading_order(lines: list[OcrLine]) -> list[OcrLine]:
@@ -159,7 +179,8 @@ _engine_error: str | None = None
 _engine_lock = threading.Lock()
 
 
-def get_engine(lang: str = "en", mkldnn: bool = True):
+def get_engine(lang: str = "en", mkldnn: bool = True, det_limit: int = 1600,
+               det_model: str | None = None, rec_model: str | None = None, verify_model: str | None = None):
     """Process-wide shared engine (created on first use or at start-up warm-up)."""
     global _engine, _engine_error
     if _engine is not None:
@@ -167,7 +188,7 @@ def get_engine(lang: str = "en", mkldnn: bool = True):
     with _engine_lock:
         if _engine is None:
             try:
-                _engine = PaddleEngine(lang, mkldnn)
+                _engine = PaddleEngine(lang, mkldnn, det_limit, det_model, rec_model, verify_model)
                 _engine_error = None
             except OcrUnavailable as exc:
                 _engine_error = str(exc)

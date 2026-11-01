@@ -58,6 +58,8 @@ private data class OpenScan(val caseCode: String, val scanCode: String)
 @Composable
 fun InspectorDashboardScreen(session: OfficerSession, onLogout: () -> Unit) {
     val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    remember { AnalyzerClient.init(context) }
     val store = remember(session.token) { InspectorStore(session, scope, onLogout) }
     val exporter = rememberReportExporter(store)
 
@@ -70,6 +72,7 @@ fun InspectorDashboardScreen(session: OfficerSession, onLogout: () -> Unit) {
     var menuOpen by rememberSaveable { mutableStateOf(false) }
     var profileOpen by rememberSaveable { mutableStateOf(false) }
     var confirmLogout by rememberSaveable { mutableStateOf(false) }
+    var serverOpen by rememberSaveable { mutableStateOf(false) }
     var loggingOut by remember { mutableStateOf(false) }
     var caseRefresh by remember { mutableIntStateOf(0) }
 
@@ -200,6 +203,7 @@ fun InspectorDashboardScreen(session: OfficerSession, onLogout: () -> Unit) {
                 pending = pending,
                 onSelect = ::selectTab,
                 onRefresh = { menuOpen = false; store.loadAll(); store.checkAnalyzer(); store.showToast("Refreshing live data…") },
+                onServer = { menuOpen = false; serverOpen = true },
                 onLogout = { menuOpen = false; confirmLogout = true },
                 onDismiss = { menuOpen = false }
             )
@@ -230,6 +234,8 @@ fun InspectorDashboardScreen(session: OfficerSession, onLogout: () -> Unit) {
             )
         }
     }
+
+    if (serverOpen) AnalyzerServerDialog(store) { serverOpen = false }
 
     if (profileOpen) {
         InspectorProfileDialog(
@@ -362,6 +368,7 @@ private fun InspectorSideMenu(
     pending: Int,
     onSelect: (InsTab) -> Unit,
     onRefresh: () -> Unit,
+    onServer: () -> Unit,
     onLogout: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -429,6 +436,7 @@ private fun InspectorSideMenu(
             Spacer(Modifier.height(10.dp))
             AnalyzerStatusRow(store)
             Spacer(Modifier.height(6.dp))
+            MenuRow(AIcon.CAMERA, "Analyzer server", AC.Ink, onServer)
             MenuRow(AIcon.REFRESH, "Refresh live data", AC.Ink, onRefresh)
             MenuRow(AIcon.LOGOUT, "Log out", AC.Red, onLogout)
 
@@ -526,3 +534,56 @@ private fun InspectorProfileDialog(session: OfficerSession, profile: MyProfile?,
 /** "Aug 2026 – Present" */
 internal fun tenureLabel(since: String?): String =
     if (parseDate(since) == null) "—" else "${fmtMonthYear(since)} – Present"
+
+// ---------------------------------------------------------------------------
+// Analyzer server address (saved on the phone, overrides the build setting)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun AnalyzerServerDialog(store: InspectorStore, onDismiss: () -> Unit) {
+    var url by rememberSaveable { mutableStateOf(AnalyzerClient.savedUrl.orEmpty()) }
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(26.dp)).background(Color.White)
+                .verticalScroll(rememberScrollState()).padding(20.dp)
+        ) {
+            Text("Analyzer server", color = AC.Ink, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
+            Text(
+                "Where the ComplyVision analyzer (FastAPI) is running. Leave empty to use the automatic choice.",
+                color = AC.Muted, fontSize = 13.sp, lineHeight = 17.sp
+            )
+            Spacer(Modifier.height(14.dp))
+            Box(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(AC.PageMid)
+                    .border(1.dp, AC.Line, RoundedCornerShape(14.dp)).padding(horizontal = 12.dp, vertical = 12.dp)
+            ) {
+                if (url.isEmpty()) Text("http://192.168.1.20:8000", color = AC.Faint, fontSize = 14.sp)
+                androidx.compose.foundation.text.BasicTextField(
+                    value = url, onValueChange = { url = it.trim().take(120) }, singleLine = true,
+                    textStyle = TextStyle(color = AC.Ink, fontSize = 14.sp),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(AC.Blue),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Uri),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "• Phone on USB: run  adb reverse tcp:8000 tcp:8000  on the PC and leave this empty.\n" +
+                    "• Same Wi-Fi: enter the PC's Wi-Fi IPv4 address (ipconfig), e.g. http://192.168.1.20:8000, " +
+                    "and allow port 8000 through the Windows firewall.\n" +
+                    "• Tried in order: ${AnalyzerClient.candidates.joinToString(", ")}",
+                color = AC.Muted, fontSize = 11.5.sp, lineHeight = 16.sp
+            )
+            Spacer(Modifier.height(12.dp))
+            AnalyzerStatusRow(store)
+            Spacer(Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                SoftButton("Close", onDismiss, Modifier.weight(1f), height = 44.dp)
+                PrimaryButton("Save & test", {
+                    AnalyzerClient.savedUrl = url
+                    store.checkAnalyzer()
+                }, Modifier.weight(1.3f), height = 44.dp)
+            }
+        }
+    }
+}

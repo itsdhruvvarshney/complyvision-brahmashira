@@ -20,6 +20,7 @@ import numpy as np
 
 from .config import ANALYZER_VERSION, Settings
 from .extract.fields import expected_from_context, extract, fix_number, quantity_from_text
+from .ocr.rescue import needs_rescue, rescue
 from .ocr.verify import verify_lines
 from .rules import engine as rules_engine
 from .validation import validate_image
@@ -36,12 +37,21 @@ STATUS_RANK = {"FAIL": 3, "REVIEW": 2, "PASS": 1, "NOT_APPLICABLE": 0}
 CONTRAST_FIELDS = ("mrp", "net_quantity", "mfg_date", "best_before", "manufacturer", "customer_care")
 
 
+class AnalysisAbandoned(Exception):
+    """The request's time budget ran out; the caller has already given up waiting."""
+
+
 class StageTimer:
-    def __init__(self):
+    def __init__(self, deadline: float | None = None):
         self.stages: list[dict] = []
+        self.deadline = deadline
 
     @contextmanager
     def stage(self, name: str, label: str):
+        # Stop between stages once the client has been told it timed out, so a stale request does
+        # not hold the shared OCR engine while the next scan waits behind it
+        if self.deadline is not None and time.monotonic() > self.deadline:
+            raise AnalysisAbandoned(name)
         started = time.perf_counter()
         entry = {"stage": name, "label": label, "status": "ok"}
         try:
@@ -116,8 +126,9 @@ def _ai_cross_check(decl: dict, ai: dict) -> list[dict]:
 
 
 def analyze(data: bytes, filename: str | None, declared_mime: str | None, raw_context: dict,
-            ocr_engine, gemini, settings: Settings, rules: list | None = None, today: date | None = None) -> dict:
-    timer = StageTimer()
+            ocr_engine, gemini, settings: Settings, rules: list | None = None, today: date | None = None,
+            deadline: float | None = None) -> dict:
+    timer = StageTimer(deadline)
     started = time.perf_counter()
     report_id = str(uuid.uuid4())
     context = _clean_context(raw_context or {})
@@ -154,11 +165,29 @@ def analyze(data: bytes, filename: str | None, declared_mime: str | None, raw_co
         with timer.stage("ocr", "PaddleOCR text recognition"):
             lines = ocr_engine.read(processed)
 
+        rescue_info = None
+        with timer.stage("rescue", "Adaptive re-read (orientation & tiles)") as st:
+            why = needs_rescue(extract([ln for ln in lines if ln.confidence >= settings.ocr_min_confidence], context, today), lines)
+            if why and settings.ocr_rescue:
+                try:
+                    processed, lines, rescue_info = rescue(ocr_engine, processed, lines, why)
+                    if rescue_info["rotated_deg"]:
+                        calibration = calibrate(processed, context.get("marker_mm", settings.aruco_marker_mm))
+                        quality["warnings"].append({"code": "ORIENTATION", "severity": "low",
+                                                    "message": f"Photo was turned {rescue_info['rotated_deg']} deg; it was rotated upright."})
+                except Exception:  # a failed second look never breaks the first result
+                    log.exception("OCR rescue failed")
+                    st["status"] = "skipped"
+            else:
+                st["status"] = "skipped"
+
         with timer.stage("verify", "Conditional OCR verification"):
-            verification = verify_lines(ocr_engine, processed, lines, settings.verify_below_confidence)
+            verification = verify_lines(ocr_engine, processed, lines, settings.verify_below_confidence, settings.ocr_verify_max)
             dropped = [ln for ln in lines if ln.confidence < settings.ocr_min_confidence]
             lines = [ln for ln in lines if ln.confidence >= settings.ocr_min_confidence]
             verification["dropped_low_confidence"] = len(dropped)
+            if rescue_info:
+                verification["rescue"] = rescue_info
 
         with timer.stage("extract", "Field extraction"):
             decl = extract(lines, context, today)

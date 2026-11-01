@@ -36,6 +36,8 @@ def fix_number(raw: str) -> float | None:
 def normalise_text(text: str) -> str:
     t = text.replace("`", "₹").replace("₨", "₹").replace("|", "I")
     t = re.sub(r"\bR[sS]\s*[.,:]?\s*(?=\d)", "Rs. ", t)
+    # Light OCR models often read the rupee sign as "<", "?", "2" or "Z" right after a price label
+    t = re.sub(r"((?:m\.?\s*r\.?\s*p\.?|price)\s*[:\-]?\s*)(?:[<?]|[2zZ](?=\s+\d))\s*(?=\d)", "\\1₹ ", t, flags=re.IGNORECASE)
     t = re.sub(r"\s+", " ", t)
     return t.strip()
 
@@ -65,7 +67,7 @@ MFG_LABEL = re.compile(
 )
 BB_LABEL = re.compile(r"(best\s*before|best\s*by|use\s*by|use\s*before|expiry\s*date|exp(?:iry)?\.?\s*(?:date|dt)?|expires?\s*on|\bbb\b)", re.I)
 BB_DURATION = re.compile(
-    r"(?:best\s*before|use\s*(?:by|within)|consume\s*within|shelf\s*life)\D{0,20}?(\d{1,2})\s*(months?|mths?|days?|years?|yrs?)"
+    r"(?:best\s*before|use\s*(?:by|within|before)|consume\s*within|shelf\s*life)\D{0,20}?(\d{1,2})\s*(months?|mths?|days?|years?|yrs?)"
     r"(?:\s*(?:from|after|of)\s*(?:the\s*)?(?:date\s*of\s*)?(?:mfg|manufactur\w*|pack\w*|pkg|pkd))?",
     re.I,
 )

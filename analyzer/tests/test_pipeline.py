@@ -85,7 +85,7 @@ def test_full_pipeline_on_synthetic_label():
     assert all(e["image"].startswith("data:image/jpeg;base64,") for e in report["evidence"])
     assert report["annotated_image"].startswith("data:image/jpeg;base64,")
     assert [s["stage"] for s in report["pipeline"]] == [
-        "validate", "quality", "preprocess", "calibration", "enhance", "ocr", "verify", "extract", "measure", "ai", "rules", "evidence"]
+        "validate", "quality", "preprocess", "calibration", "enhance", "ocr", "rescue", "verify", "extract", "measure", "ai", "rules", "evidence"]
     assert any(s["step"] == "deskew" and s["applied"] for s in report["preprocessing"])
 
 
@@ -102,7 +102,7 @@ def test_api(monkeypatch):
     from app import main
 
     img, texts = make_label()
-    monkeypatch.setattr(main, "get_engine", lambda lang, mkldnn=True: FakeEngine(texts))
+    monkeypatch.setattr(main, "get_engine", lambda *a, **k: FakeEngine(texts))
     client = TestClient(main.app)
     assert client.get("/health").json()["status"] == "ok"
     assert len(client.get("/rules").json()["rules"]) == 16
@@ -121,3 +121,16 @@ def test_white_print_on_coloured_pack_is_not_glare():
     img = np.full((600, 900, 3), (40, 40, 210), np.uint8)  # red packaging
     cv2.putText(img, "NET QTY 1 KG", (60, 300), cv2.FONT_HERSHEY_SIMPLEX, 3.2, (255, 255, 255), 14, cv2.LINE_AA)
     assert (glare_mask(img) > 0).sum() == 0
+
+
+def test_rescue_merges_tile_reads_without_duplicates():
+    from app.ocr.engine import OcrLine
+    from app.ocr.rescue import merge_lines, needs_rescue
+
+    base = [OcrLine("MRP Rs. 1", 0.6, (10, 10, 100, 20))]
+    better = OcrLine("MRP Rs. 145", 0.95, (12, 11, 110, 20))
+    new = OcrLine("Net Qty 1 kg", 0.9, (10, 60, 100, 20))
+    merged = merge_lines(base, [better, new])
+    assert [ln.text for ln in merged] == ["MRP Rs. 145", "Net Qty 1 kg"]
+    assert needs_rescue({}, merged) is not None
+    assert needs_rescue({"mrp": 1, "net_quantity": 1, "mfg_date": 1}, merged * 3) is None
