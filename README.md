@@ -22,11 +22,19 @@ The public homepage introduces ComplyVision and its accessible label-checking wo
 
 Users choose the Legal Metrology officer portal or the business pre-verification portal. The business flow verifies the user's email with a one-time code. Preview actions are available for local demonstrations.
 
+#### Legal Metrology officer sign-in
+
+![Legal Metrology officer sign-in screen](docs/screenshots/legal-metrology-sign-in.png)
+
+#### Business pre-verification sign-in
+
 ![Business pre-verification sign-in screen](docs/screenshots/preverification-sign-in.png)
 
 ### Inspector dashboard
 
 The inspector dashboard summarizes assigned and recent inspections and links into the review workflow. Preview mode uses sample browser data.
+
+![Inspector dashboard with assigned cases, case flow, recent activity, and case queue](docs/screenshots/inspector-dashboard.png)
 
 ### Supreme Authority dashboard
 
@@ -44,6 +52,8 @@ The workspace presents the package image, extracted declarations, rule outcomes,
 
 The history page lists saved evaluations in the current browser profile and opens reports for review.
 
+![Inspection history with a saved report](docs/screenshots/inspection-history.png)
+
 ### Accessibility insights
 
 Accessibility insights turns an inspection's extracted values into a spoken summary, with language choices where browser speech support is available.
@@ -52,15 +62,19 @@ Accessibility insights turns an inspection's extracted values into a spoken summ
 
 The rule catalogue supports searching and filtering the prototype rule matrix, with applicability and implementation notes.
 
+![Legal Metrology rule catalogue](docs/screenshots/rule-management.png)
+
 ### Analytics and reports
 
 Reports present the selected evaluation's rule outcomes, evidence, measurements, and export options.
+
+![Inspection report with overall result, rule totals, and extracted declarations](docs/screenshots/inspection-reports.png)
 
 ### Settings and account profile
 
 Settings shows the signed-in account identifier, email when available, portal role, sign-in type, account status, and role scope. Workspace language and summary preferences are saved in the browser.
 
-Screenshots above are the available user-provided captures. The remaining page headings document the site's current sections; fresh full-page captures for authenticated dashboard and review screens have not been added yet.
+The screenshots are provided for visual reference and may show sample data. Supreme Authority dashboard, business pre-verification dashboard, inspection workspace, accessibility insights, and settings are documented above but do not yet have screenshots in this README.
 
 ## Inspection workflow
 
