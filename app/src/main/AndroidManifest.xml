@@ -19,7 +19,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:label="@string/app_name"
+            android:label="@string/app _name"
             android:theme="@style/Theme.ComplyVision">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

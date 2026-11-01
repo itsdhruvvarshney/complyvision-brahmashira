@@ -315,7 +315,7 @@ private fun RuleResultsCard(stats: List<RuleStat>) {
     val shown = if (expanded) sorted else sorted.take(6)
     GlassCard(padding = 16.dp) {
         Text("Test case results by rule", color = AC.Ink, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold)
-        Text("Legal Metrology (Packaged Commodities) Rules checks across every package", color = AC.Muted, fontSize = 12.sp)
+        Text("Every rule the category-aware engine applied to this case's packages", color = AC.Muted, fontSize = 12.sp)
         Spacer(Modifier.height(10.dp))
         shown.forEach { r ->
             val applicable = r.passed + r.failed + r.review
@@ -391,7 +391,8 @@ internal fun ScanRow(s: ScanSummary, onClick: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(s.scanCode, color = AC.Ink, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             Text(
-                "${fmtDateTime(s.createdAt)} • ${s.source}" + if (s.quality.isNotBlank()) " • ${s.quality} image" else "",
+                listOfNotNull(fmtDateTime(s.createdAt), s.category.takeIf { it.isNotBlank() }, s.source,
+                    s.quality.takeIf { it.isNotBlank() }?.let { "$it image" }, s.resolvedAt?.let { "reviewed" }).joinToString(" • "),
                 color = AC.Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
             )
             if (s.flags.isNotEmpty()) {

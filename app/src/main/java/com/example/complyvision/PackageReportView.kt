@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.launch
 import java.util.Locale
 
 internal fun ruleTone(status: String): Pair<Color, Color> = when (status) {
@@ -58,9 +59,11 @@ fun PackageReportPage(
     var state by remember(scanCode) { mutableStateOf<Load<Pair<ScanSummary, PackageReport>>>(Load.Loading) }
     var caseInfo by remember(caseCode) { mutableStateOf<MyCase?>(null) }
     var reload by remember { mutableIntStateOf(0) }
+    var resolving by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(scanCode, reload) {
-        state = Load.Loading
+        if (state !is Load.Ready) state = Load.Loading
         state = try {
             Load.Ready(store.scan(scanCode))
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -89,7 +92,18 @@ fun PackageReportPage(
                     caseInfo?.let { c ->
                         Text("${c.product} • ${c.code}", color = AC.Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     }
-                    PackageReportContent(report, summary)
+                    // Review items can be settled while the inspection is still open
+                    val canResolve = caseInfo?.status == CaseStatus.IN_PROGRESS
+                    PackageReportContent(report, summary, resolving = resolving, onResolve = if (!canResolve) null else { decisions ->
+                        resolving = true
+                        scope.launch {
+                            when (val r = store.resolveScan(summary.scanCode, decisions)) {
+                                is ActionResult.Done -> { store.showToast("Decisions saved - package re-scored"); reload++ }
+                                is ActionResult.Rejected -> store.showToast(r.message, isError = true)
+                            }
+                            resolving = false
+                        }
+                    })
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         PrimaryButton("Download PDF", { exporter.packagePdf(caseInfo, summary, report) }, Modifier.weight(1f),
                             loading = exporter.busy == "pdf:${summary.scanCode}", icon = AIcon.DOWNLOAD, height = 44.dp)
@@ -102,14 +116,31 @@ fun PackageReportPage(
     }
 }
 
-/** Full rendering of a canonical package report (shared by the scanner result and stored reports) */
+/**
+ * Full rendering of a canonical package report (shared by the scanner result and stored reports):
+ * verdict -> how the product was categorised and which standards apply -> the inspector's review
+ * items -> every applied rule grouped by section -> evidence and the technical trail.
+ */
 @Composable
-fun PackageReportContent(report: PackageReport, summary: ScanSummary?) {
+fun PackageReportContent(
+    report: PackageReport,
+    summary: ScanSummary?,
+    onChangeCategory: (() -> Unit)? = null,
+    resolving: Boolean = false,
+    onResolve: ((List<RuleDecision>) -> Unit)? = null
+) {
     val evidenceById = remember(report) { report.evidence.associateBy { it.id } }
     var zoom by remember { mutableStateOf<String?>(null) }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         VerdictCard(report, summary)
+
+        report.classification?.let { ClassificationCard(it, onChangeCategory) }
+
+        val pending = report.reviewRules
+        if (onResolve != null && pending.isNotEmpty()) ReviewResolutionCard(pending, resolving, onResolve)
+
+        RuleList(report, evidenceById) { zoom = it }
 
         if (report.annotatedImage.isNotBlank()) {
             GlassCard(padding = 12.dp) {
@@ -118,8 +149,6 @@ fun PackageReportContent(report: PackageReport, summary: ScanSummary?) {
                 DataImage(report.annotatedImage, Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(role = Role.Button) { zoom = report.annotatedImage }, 1400)
             }
         }
-
-        RuleList(report, evidenceById) { zoom = it }
 
         if (report.evidence.isNotEmpty()) EvidenceGrid(report.evidence) { zoom = it }
 
@@ -248,11 +277,31 @@ private fun CountChip(label: String, value: Int, status: String, modifier: Modif
 @Composable
 private fun RuleList(r: PackageReport, evidence: Map<String, EvidenceItem>, onZoom: (String) -> Unit) {
     val order = listOf(RuleStatus.FAIL, RuleStatus.REVIEW, RuleStatus.PASS, RuleStatus.NA)
-    val sorted = r.rules.sortedWith(compareBy({ order.indexOf(it.status).let { i -> if (i < 0) 9 else i } }, { it.id }))
+    var status by rememberSaveable { mutableStateOf<String?>(null) }
+    var section by rememberSaveable { mutableStateOf<String?>(null) }
+    val shown = r.rules.filter { (status == null || it.status == status) && (section == null || it.section == section) }
+    val category = r.classification?.categoryName
     GlassCard(padding = 14.dp) {
-        SectionHeader(AIcon.CLIPBOARD, "Test case results", "${r.rules.size} Legal Metrology rules • tap a rule for its evidence")
-        Spacer(Modifier.height(8.dp))
-        sorted.forEach { rule -> RuleRow(rule, evidence, onZoom) }
+        SectionHeader(AIcon.CLIPBOARD, "Rule-by-rule verification",
+            "${r.rules.size} rules applied" + (category?.let { " for ${it.lowercase(Locale.ENGLISH)}" } ?: "") + " • tap a rule for its evidence")
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterPill("All", status == null, { status = null }, r.rules.size)
+            listOf(RuleStatus.FAIL to "Failed", RuleStatus.REVIEW to "Review", RuleStatus.PASS to "Passed", RuleStatus.NA to "N/A").forEach { (s, label) ->
+                val n = r.rules.count { it.status == s }
+                if (n > 0) FilterPill(label, status == s, { status = if (status == s) null else s }, n)
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        SectionSummary(r.sections, section) { section = it }
+        Spacer(Modifier.height(6.dp))
+        // Grouped by section in catalog order; failures first inside each section
+        shown.groupBy { it.section }.forEach { (name, rules) ->
+            Text(name.uppercase(Locale.ENGLISH), color = AC.Faint, fontSize = 10.5.sp, fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier.padding(top = 10.dp, bottom = 2.dp, start = 2.dp))
+            rules.sortedBy { order.indexOf(it.status).let { i -> if (i < 0) 9 else i } }.forEach { rule -> RuleRow(rule, evidence, onZoom) }
+        }
+        if (shown.isEmpty()) Text("No rules match this filter.", color = AC.Muted, fontSize = 12.5.sp, modifier = Modifier.padding(vertical = 8.dp))
     }
 }
 
@@ -281,8 +330,16 @@ private fun RuleRow(rule: RuleResult, evidence: Map<String, EvidenceItem>, onZoo
                     if (rule.found.isNotBlank()) LabelValue("Found", rule.found, Modifier.weight(1f), valueColor = fg)
                 }
             }
-            val meta = listOf(rule.reference, rule.category, rule.severity.takeIf { it.isNotBlank() }?.let { "$it severity" }).filter { !it.isNullOrBlank() }
-            if (meta.isNotEmpty()) Text(meta.joinToString(" • "), color = AC.Faint, fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp))
+            if (rule.resolved) {
+                Text("Settled by ${rule.resolvedBy} on the physical pack" + (rule.resolvedAt.takeIf { it.isNotBlank() }?.let { " • ${fmtDateTime(it)}" } ?: ""),
+                    color = AC.Violet, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
+            }
+            if (rule.reference.isNotBlank()) {
+                Text(rule.reference, color = AC.Muted, fontSize = 11.sp, lineHeight = 14.sp, modifier = Modifier.padding(top = 6.dp))
+            }
+            val meta = listOf(rule.applies.takeIf { it.isNotBlank() }?.let { "Applies: $it" }, rule.severity.takeIf { it.isNotBlank() }?.let { "$it severity" })
+                .filter { !it.isNullOrBlank() }
+            if (meta.isNotEmpty()) Text(meta.joinToString(" • "), color = AC.Faint, fontSize = 11.sp, modifier = Modifier.padding(top = 2.dp))
             val crops = rule.evidence.mapNotNull { evidence[it] }
             if (crops.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))

@@ -33,8 +33,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -115,9 +122,12 @@ private val AnalyzerStages = listOf(
     "Field extraction (MRP, net qty, dates…)",
     "Numeral height & local contrast",
     "Gemini enrichment",
-    "Compliance rule engine",
+    "Product categorisation",
+    "Category rule engine (LM, FSS, BIS…)",
     "Evidence crops & canonical report"
 )
+
+private val PackageChoices = listOf(null to "Auto", "retail" to "Retail", "wholesale" to "Wholesale", "institutional" to "Institutional")
 
 @Composable
 fun PackageScanScreen(
@@ -133,6 +143,17 @@ fun PackageScanScreen(
     var save by remember { mutableStateOf<SaveState?>(null) }
     var uploaded by remember { mutableFloatStateOf(0f) }
     var sessionCount by remember { mutableIntStateOf(0) }
+
+    // Rule-engine settings: null category = let the engine categorise the product
+    var categoryChoice by rememberSaveable { mutableStateOf<String?>(null) }
+    var packageChoice by rememberSaveable { mutableStateOf<String?>(null) }
+    var panelW by rememberSaveable { mutableStateOf("") }
+    var panelH by rememberSaveable { mutableStateOf("") }
+    var pickerOpen by remember { mutableStateOf(false) }
+    var awaitingConfirm by remember { mutableStateOf(false) }
+    var resolving by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { store.loadCategories() }
+    val panelArea = panelW.toDoubleOrNull()?.let { w -> panelH.toDoubleOrNull()?.let { h -> w * h } }?.takeIf { it in 1.0..20000.0 }
 
     /** MIME-validates the original, then crops / resizes it on the phone before upload */
     fun accept(check: ImageCheck, source: String, crop: ((Int, Int) -> android.graphics.Rect)? = null) {
@@ -173,6 +194,7 @@ fun PackageScanScreen(
         stage = ScanStage.Analyzing(image, source)
         uploaded = 0f
         save = null
+        awaitingConfirm = false
         scope.launch {
             try {
                 val json = AnalyzerClient.analyze(
@@ -183,12 +205,16 @@ fun PackageScanScreen(
                         "brand" to case.brand,
                         "category" to case.category,
                         "declared_mrp" to case.mrp?.let { String.format(Locale.US, "%.2f", it) },
-                        "source" to source
+                        "source" to source,
+                        "category_id" to categoryChoice,
+                        "package_type" to packageChoice,
+                        "pdp_area_cm2" to panelArea?.let { String.format(Locale.US, "%.1f", it) }
                     )
                 ) { uploaded = it }
                 val report = withContext(Dispatchers.Default) { PackageReport.parse(json) }
                 stage = ScanStage.Done(image, source, json, report)
-                persist(json, source)
+                // A low-confidence category would apply the wrong standards: hold the save until the inspector confirms
+                if (report.classification?.needsConfirmation == true) awaitingConfirm = true else persist(json, source)
             } catch (e: AnalyzerException) {
                 stage = ScanStage.Failed(e.message ?: "Analysis failed.", image, source,
                     retryable = e.failure != AnalyzerFailure.REJECTED && e.failure != AnalyzerFailure.NOT_CONFIGURED)
@@ -227,6 +253,14 @@ fun PackageScanScreen(
             is ScanStage.Ready -> ReadyView(
                 image = s.image,
                 source = s.source,
+                category = store.categories?.byId(categoryChoice),
+                caseCategory = case.category,
+                packageChoice = packageChoice,
+                panelW = panelW,
+                panelH = panelH,
+                onPickCategory = { pickerOpen = true },
+                onPackage = { packageChoice = it },
+                onPanel = { w, h -> panelW = w; panelH = h },
                 onRetake = { stage = ScanStage.Capture },
                 onAnalyse = { analyse(s.image, s.source) }
             )
@@ -247,10 +281,48 @@ fun PackageScanScreen(
                 report = s.report,
                 save = save,
                 exporter = exporter,
+                awaitingConfirm = awaitingConfirm,
+                resolving = resolving,
+                onConfirm = { awaitingConfirm = false; persist(s.json, s.source) },
+                // Re-checking with another category is offered until the result is saved
+                onChangeCategory = if (save == null || save is SaveState.Error) ({ pickerOpen = true }) else null,
+                onResolve = (save as? SaveState.Saved)?.let { saved ->
+                    { decisions: List<RuleDecision> ->
+                        resolving = true
+                        scope.launch {
+                            when (val r = store.resolveScan(saved.scan.scanCode, decisions)) {
+                                is ActionResult.Done -> {
+                                    try {
+                                        val (sum, fresh) = store.scan(saved.scan.scanCode)
+                                        stage = s.copy(report = fresh)
+                                        save = SaveState.Saved(SavedScan(sum.scanCode, sum.verdict, sum.passed, sum.failed, sum.review, sum.score))
+                                    } catch (_: Exception) {
+                                    }
+                                    store.showToast("Decisions saved - package re-scored")
+                                }
+                                is ActionResult.Rejected -> store.showToast(r.message, isError = true)
+                            }
+                            resolving = false
+                        }
+                    }
+                },
                 onRetrySave = { persist(s.json, s.source) },
-                onNext = { stage = ScanStage.Capture; save = null },
+                onNext = { stage = ScanStage.Capture; save = null; awaitingConfirm = false },
                 onOpen = { (save as? SaveState.Saved)?.let { onOpenReport(it.scan.scanCode) } },
                 onClose = onClose
+            )
+        }
+
+        if (pickerOpen) {
+            CategoryPickerDialog(
+                catalog = store.categories,
+                selectedId = categoryChoice,
+                onPick = { picked ->
+                    pickerOpen = false
+                    categoryChoice = picked?.id
+                    (stage as? ScanStage.Done)?.let { d -> analyse(d.image, d.source) }
+                },
+                onDismiss = { pickerOpen = false }
             )
         }
     }
@@ -499,7 +571,20 @@ private fun DarkRoundButton(icon: AIcon, description: String, onClick: () -> Uni
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun ReadyView(image: ValidatedImage, source: String, onRetake: () -> Unit, onAnalyse: () -> Unit) {
+private fun ReadyView(
+    image: ValidatedImage,
+    source: String,
+    category: ProductCategory?,
+    caseCategory: String,
+    packageChoice: String?,
+    panelW: String,
+    panelH: String,
+    onPickCategory: () -> Unit,
+    onPackage: (String?) -> Unit,
+    onPanel: (String, String) -> Unit,
+    onRetake: () -> Unit,
+    onAnalyse: () -> Unit
+) {
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(16.dp)) {
         Text("Check the photo", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
         Text("The label should be in focus and fully visible.", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
@@ -509,6 +594,46 @@ private fun ReadyView(image: ValidatedImage, source: String, onRetake: () -> Uni
             contentScale = ContentScale.Fit, modifier = Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.Black)
         )
         Spacer(Modifier.height(12.dp))
+
+        // Rule-engine settings: what the product is decides which standards are verified
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color.White.copy(alpha = 0.08f)).padding(12.dp)) {
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(role = Role.Button) { onPickCategory() }.padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                AIconView(AIcon.BOX, Color(0xFF5EA2FF), Modifier.size(20.dp))
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Product category", color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        category?.let { "${it.name} • ${it.rules} rules" } ?: "Auto-detect" + if (caseCategory.isNotBlank()) " (case: $caseCategory)" else "",
+                        color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Text("Change", color = Color(0xFF5EA2FF), fontSize = 12.5.sp, fontWeight = FontWeight.ExtraBold)
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                PackageChoices.forEach { (id, label) ->
+                    val on = packageChoice == id
+                    Text(
+                        label, color = if (on) AC.Ink else Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.clip(RoundedCornerShape(50)).background(if (on) Color.White else Color.White.copy(alpha = 0.12f))
+                            .clickable(role = Role.Button) { onPackage(id) }.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Label panel (cm)", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp, modifier = Modifier.weight(1f))
+                CmField(panelW, "W") { onPanel(it, panelH) }
+                Text(" × ", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
+                CmField(panelH, "H") { onPanel(panelW, it) }
+            }
+            Text("Optional - the panel size sets the Rule 7 minimum font height; without it the ArUco photo scale estimates it.",
+                color = Color.White.copy(alpha = 0.5f), fontSize = 10.5.sp, lineHeight = 13.sp, modifier = Modifier.padding(top = 4.dp))
+        }
+        Spacer(Modifier.height(10.dp))
         Row(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color.White.copy(alpha = 0.08f)).padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -526,6 +651,25 @@ private fun ReadyView(image: ValidatedImage, source: String, onRetake: () -> Uni
             SoftButton("Retake", onRetake, Modifier.weight(1f), fg = Color.White, bg = Color.White.copy(alpha = 0.14f), height = 50.dp)
             PrimaryButton("Analyse package", onAnalyse, Modifier.weight(1.5f), icon = AIcon.SEARCH, height = 50.dp)
         }
+    }
+}
+
+@Composable
+private fun CmField(value: String, hint: String, onChange: (String) -> Unit) {
+    Box(
+        Modifier.width(58.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.12f)).padding(horizontal = 8.dp, vertical = 7.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        if (value.isEmpty()) Text(hint, color = Color.White.copy(alpha = 0.4f), fontSize = 13.sp)
+        BasicTextField(
+            value = value,
+            onValueChange = { v -> onChange(v.filter { it.isDigit() || it == '.' }.take(5)) },
+            singleLine = true,
+            textStyle = TextStyle(color = Color.White, fontSize = 13.sp, textAlign = TextAlign.Center),
+            cursorBrush = SolidColor(Color.White),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 
@@ -643,6 +787,11 @@ private fun ResultView(
     report: PackageReport,
     save: SaveState?,
     exporter: ReportExporter,
+    awaitingConfirm: Boolean,
+    resolving: Boolean,
+    onConfirm: () -> Unit,
+    onChangeCategory: (() -> Unit)?,
+    onResolve: ((List<RuleDecision>) -> Unit)?,
     onRetrySave: () -> Unit,
     onNext: () -> Unit,
     onOpen: () -> Unit,
@@ -655,8 +804,9 @@ private fun ResultView(
                 Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 14.dp).padding(bottom = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                SaveBanner(save, onRetrySave, onOpen)
-                PackageReportContent(report, null)
+                if (awaitingConfirm) ConfirmCategoryBanner(report.classification, onConfirm, onChangeCategory)
+                else SaveBanner(save, onRetrySave, onOpen)
+                PackageReportContent(report, null, onChangeCategory, resolving, onResolve)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     val summary = (save as? SaveState.Saved)?.scan?.let {
                         ScanSummary(it.scanCode, it.verdict, it.passed, it.failed, it.review, report.notApplicable, it.score,
@@ -674,8 +824,29 @@ private fun ResultView(
             ) {
                 SoftButton("Done", onClose, Modifier.weight(1f), height = 48.dp)
                 PrimaryButton("Scan next package", onNext, Modifier.weight(1.6f), icon = AIcon.PLUS, height = 48.dp,
-                    enabled = save !is SaveState.Saving)
+                    enabled = save !is SaveState.Saving && !awaitingConfirm)
             }
+        }
+    }
+}
+
+@Composable
+private fun ConfirmCategoryBanner(c: Classification?, onConfirm: () -> Unit, onChange: (() -> Unit)?) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(AC.AmberSoft).padding(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            AIconView(AIcon.HOURGLASS, AC.Amber, Modifier.size(20.dp))
+            Spacer(Modifier.width(10.dp))
+            Text(
+                if (c?.source == "fallback") "The product could not be categorised. Choose its category so the right standards are verified."
+                else "Is this ${c?.categoryName?.lowercase(Locale.ENGLISH) ?: "the right category"}? Confirm before the result is saved.",
+                color = AC.Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 17.sp, modifier = Modifier.weight(1f)
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (onChange != null) SoftButton("Choose category", onChange, Modifier.weight(1f), icon = AIcon.BOX, height = 40.dp)
+            PrimaryButton(if (c?.source == "fallback") "Save as general" else "Confirm & save", onConfirm, Modifier.weight(1f),
+                icon = AIcon.CHECK_CIRCLE, height = 40.dp)
         }
     }
 }

@@ -23,11 +23,21 @@ LABEL_LINES = [
     ("Batch No: RH2608-114", 0.9),
     ("Mfd by: Royal Harvest Foods Pvt Ltd, Plot 12, Industrial Area, Karnal 132001", 0.75),
     ("Customer Care: 1800 120 4455  care@royalharvest.in", 0.8),
+    ("FSSAI Lic. No. 10012345000123", 0.8),
 ]
 
 
-def make_label(lines=LABEL_LINES, marker_px: int = 160, with_marker: bool = True) -> tuple[np.ndarray, list[str]]:
-    canvas = np.full((1250, 1700, 3), 247, np.uint8)
+def draw_veg_mark(canvas: np.ndarray, x: int, y: int, side: int = 70, colour=(40, 150, 30)) -> None:
+    """FSS vegetarian symbol: a coloured square outline with a filled circle in the centre (BGR colour)."""
+    t = max(3, side // 9)
+    cv2.rectangle(canvas, (x, y), (x + side, y + side), colour, t)
+    cv2.circle(canvas, (x + side // 2, y + side // 2), int(side * 0.22), colour, -1)
+
+
+def make_label(lines=LABEL_LINES, marker_px: int = 160, with_marker: bool = True, veg_mark: bool = True) -> tuple[np.ndarray, list[str]]:
+    canvas = np.full((1300, 1700, 3), 247, np.uint8)
+    if veg_mark:
+        draw_veg_mark(canvas, 1560, 40)
     y = 90
     texts = []
     for text, scale in lines:

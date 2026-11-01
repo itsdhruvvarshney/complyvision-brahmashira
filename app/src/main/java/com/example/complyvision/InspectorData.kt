@@ -161,7 +161,9 @@ data class ScanSummary(
     val analyzerVersion: String,
     val durationMs: Int,
     val createdAt: String,
-    val flags: List<RuleFlag>
+    val flags: List<RuleFlag>,
+    val category: String = "",
+    val resolvedAt: String? = null
 )
 
 data class RuleStat(
@@ -226,6 +228,49 @@ data class CaseReport(
 )
 
 data class SavedScan(val scanCode: String, val verdict: String, val passed: Int, val failed: Int, val review: Int, val score: Double)
+
+/** One product category of the rule engine's taxonomy (public.product_categories) */
+data class ProductCategory(
+    val id: String,
+    val name: String,
+    val group: String,
+    val groupName: String,
+    val laws: List<String>,
+    val rules: Int,
+    val quantityDims: List<String>,
+    val quantityRef: String
+)
+
+data class PackageTypeOption(val id: String, val name: String, val ref: String)
+
+data class CategoryCatalog(
+    val version: String,
+    val categories: List<ProductCategory>,
+    val packageTypes: List<PackageTypeOption>,
+    /** "database" when read from Supabase, "analyzer" when read from the FastAPI service */
+    val source: String
+) {
+    fun byId(id: String?): ProductCategory? = categories.firstOrNull { it.id == id }
+
+    companion object {
+        fun parse(o: JSONObject, source: String) = CategoryCatalog(
+            version = o.str("version"),
+            categories = o.optJSONArray("categories").jsonObjects().map {
+                val q = it.optJSONObject("quantity") ?: JSONObject()
+                ProductCategory(
+                    id = it.str("id"), name = it.str("name"), group = it.str("group"), groupName = it.str("group_name"),
+                    laws = it.optJSONArray("laws").strings(), rules = it.int("rules"),
+                    quantityDims = q.optJSONArray("dims").strings(), quantityRef = q.str("ref")
+                )
+            },
+            packageTypes = o.optJSONArray("package_types").jsonObjects().map { PackageTypeOption(it.str("id"), it.str("name"), it.str("ref")) },
+            source = source
+        )
+    }
+}
+
+/** An inspector's decision on one REVIEW rule after checking the physical pack */
+data class RuleDecision(val ruleId: String, val compliant: Boolean, val note: String)
 
 sealed interface SaveScanResult {
     data class Saved(val scan: SavedScan) : SaveScanResult
@@ -367,6 +412,25 @@ object InspectorRepository {
         return SaveScanResult.Rejected(rejectionMessage(code2))
     }
 
+    suspend fun categories(token: String): CategoryCatalog =
+        CategoryCatalog.parse(call("inspector_categories", JSONObject().put("p_token", token)), "database")
+
+    suspend fun resolveScan(token: String, scanCode: String, decisions: List<RuleDecision>): ActionResult {
+        val list = org.json.JSONArray()
+        decisions.forEach {
+            list.put(JSONObject().put("id", it.ruleId).put("status", if (it.compliant) RuleStatus.PASS else RuleStatus.FAIL)
+                .put("note", it.note.trim().take(300)))
+        }
+        val r = SupabaseApi.rpc(
+            "inspector_resolve_scan",
+            JSONObject().put("p_token", token).put("p_scan_code", scanCode).put("p_decisions", list)
+        )
+        if (r.optBoolean("ok")) return ActionResult.Done()
+        val c = r.optString("code")
+        if (c == "session_expired") throw SessionExpiredException()
+        return ActionResult.Rejected(if (c == "nothing_to_resolve") "These rules were already settled." else rejectionMessage(c))
+    }
+
     suspend fun submitFindings(token: String, code: String, remarks: String): ActionResult {
         val r = SupabaseApi.rpc(
             "inspector_submit_findings",
@@ -445,7 +509,8 @@ object InspectorRepository {
         review = int("review"), notApplicable = int("not_applicable"), score = dbl("score"), quality = str("quality"),
         source = str("source"), analyzerVersion = str("analyzer_version"), durationMs = int("duration_ms"),
         createdAt = str("created_at"),
-        flags = optJSONArray("flags").jsonObjects().map { RuleFlag(it.str("id"), it.str("status"), it.str("title")) }
+        flags = optJSONArray("flags").jsonObjects().map { RuleFlag(it.str("id"), it.str("status"), it.str("title")) },
+        category = str("category"), resolvedAt = strOrNull("resolved_at")
     )
 
     fun JSONObject.toCatalog() = CatalogRule(

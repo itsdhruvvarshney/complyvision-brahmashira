@@ -1,11 +1,14 @@
 -- ComplyVision: Metrology Inspector module (package scans, compliance rule catalog, inspector
 -- dashboard / inspections / history / reports) + realistic demo data.
 --
--- Run in the Supabase SQL editor AFTER schema.sql and authority_module.sql. Safe to re-run.
+-- Run in the Supabase SQL editor AFTER schema.sql and authority_module.sql, then run rule_engine.sql.
+-- Safe to re-run.
 --
 -- What this adds
 --   * public.compliance_rules  - the Legal Metrology (Packaged Commodities) rule catalog the analyzer
---                                 evaluates (mirrors analyzer/app/rules/lm_rules.csv).
+--                                 evaluates. This file seeds the 16 core rules the demo history uses;
+--                                 rule_engine.sql (generated from analyzer/app/rules/lm_rules.csv)
+--                                 extends it to the full category-aware catalog.
 --   * public.package_scans     - one row per package analysed by the ComplyVision analyzer (FastAPI +
 --                                 OpenCV + PaddleOCR + rule engine). The canonical JSON report is kept in
 --                                 `report`; verdict and rule counts are re-computed here from the rule
@@ -105,9 +108,9 @@ values
    'The net quantity on the pack must match the quantity recorded for the product under inspection.',
    'Pack quantity matches the product record.', 'Pack quantity differs from the product record.',
    'Pack quantity could not be compared with the product record.', 'No quantity recorded for this product.')
+-- Titles, references and sections are owned by rule_engine.sql; re-running this file only refreshes
+-- the demo-seeding reasons so it never rolls the catalog back
 on conflict (id) do update set
-  sort_order = excluded.sort_order, title = excluded.title, reference = excluded.reference,
-  category = excluded.category, severity = excluded.severity, description = excluded.description,
   pass_reason = excluded.pass_reason, fail_reason = excluded.fail_reason,
   review_reason = excluded.review_reason, na_reason = excluded.na_reason;
 
@@ -137,6 +140,13 @@ create table if not exists public.package_scans (
 create index if not exists package_scans_inspector_idx  on public.package_scans (inspector_id, created_at desc);
 create index if not exists package_scans_inspection_idx on public.package_scans (inspection_id, created_at);
 
+-- Category the rule engine classified the package into (report.classification), and inspector decisions
+alter table public.package_scans add column if not exists category_id   text;
+alter table public.package_scans add column if not exists category_name text;
+alter table public.package_scans add column if not exists package_type  text;
+alter table public.package_scans add column if not exists resolved_at   timestamptz;
+create index if not exists package_scans_category_idx on public.package_scans (category_id);
+
 alter table public.compliance_rules enable row level security;
 alter table public.package_scans    enable row level security;
 revoke all on public.compliance_rules, public.package_scans from anon, authenticated;
@@ -152,14 +162,18 @@ returns text
 language sql
 immutable
 as $$
-  select case p_rule
-    when 'LM-13' then 'MRP overcharging'
-    when 'LM-16' then 'Short net quantity'
-    when 'LM-05' then 'Incorrect manufacture date'
-    when 'LM-14' then 'Incorrect manufacture date'
-    when 'LM-11' then 'Misleading quantity claim'
-    when 'LM-12' then 'Illegible declaration'
-    when 'LM-15' then 'Unclear evidence'
+  select case
+    when p_rule = 'LM-13' then 'MRP overcharging'
+    when p_rule = 'LM-16' then 'Short net quantity'
+    when p_rule in ('LM-05', 'LM-14', 'DR-05') then 'Incorrect manufacture date'
+    when p_rule in ('LM-11', 'LM-12', 'LM-30') then 'Illegible declaration'
+    when p_rule in ('LM-24', 'LM-25', 'LM-26', 'LM-27', 'LM-28', 'LM-29') then 'Misleading quantity claim'
+    when p_rule in ('LM-08', 'LM-22') then 'Incorrect unit sale price'
+    when p_rule = 'LM-23' then 'Dual or altered MRP'
+    when p_rule = 'LM-19' then 'Export pack on domestic sale'
+    when p_rule = 'LM-15' then 'Unclear evidence'
+    when p_rule in ('FS-01', 'CS-01', 'DR-02', 'AY-01', 'MD-01', 'IN-01', 'BI-01') then 'Missing licence / certification'
+    when p_rule ~ '^(FS-0[6-9]|FS-1[0-2]|TB-0[1-3]|DR-08|IN-02)$' then 'Missing statutory warning'
     else 'Missing mandatory declaration'
   end;
 $$;
@@ -196,6 +210,10 @@ as $$
     'analyzer_version', s.analyzer_version,
     'duration_ms', s.duration_ms,
     'created_at', s.created_at,
+    'category_id', s.category_id,
+    'category', s.category_name,
+    'package_type', s.package_type,
+    'resolved_at', s.resolved_at,
     'flags', coalesce((
       select jsonb_agg(jsonb_build_object('id', r->>'id', 'status', r->>'status',
                                           'title', coalesce(r->>'title', cr.title)))
@@ -520,14 +538,16 @@ begin
       select jsonb_agg(public._scan_summary(ps) order by ps.created_at desc)
       from public.package_scans ps where ps.inspection_id = i.id
     ), '[]'::jsonb),
+    -- Only the rules the category-aware engine actually evaluated for this case's packages
     'rule_stats', coalesce((
       select jsonb_agg(jsonb_build_object(
                'id', cr.id, 'title', cr.title, 'reference', cr.reference, 'severity', cr.severity,
+               'section', cr.category,
                'passed', coalesce(x.passed, 0), 'failed', coalesce(x.failed, 0),
                'review', coalesce(x.review, 0), 'not_applicable', coalesce(x.na, 0)
              ) order by cr.sort_order)
       from public.compliance_rules cr
-      left join (
+      join (
         select r->>'id' as rid,
                count(*) filter (where r->>'status' = 'PASS')           as passed,
                count(*) filter (where r->>'status' = 'FAIL')           as failed,
@@ -798,12 +818,14 @@ begin
 
   insert into public.package_scans (
     scan_code, inspection_id, inspector_id, verdict, rules_passed, rules_failed, rules_review, rules_na,
-    score, quality_grade, source, analyzer_version, duration_ms, report)
+    score, quality_grade, source, analyzer_version, duration_ms, report, category_id, category_name, package_type)
   values (
     v_scan, i.id, v_me, v_verdict, v_pass, v_fail, v_review, v_na, v_score,
     left(p_report #>> '{quality,grade}', 20), v_source, left(p_report->>'analyzer_version', 40),
     case when (p_report->>'duration_ms') ~ '^\d{1,9}$' then (p_report->>'duration_ms')::integer end,
-    p_report);
+    p_report,
+    left(p_report #>> '{classification,category,id}', 40), left(p_report #>> '{classification,category,name}', 120),
+    left(p_report #>> '{classification,package_type,id}', 20));
 
   perform public._log_event(
     i.id, 'Scan', 'Package analysed',
@@ -814,6 +836,98 @@ begin
     'ok', true, 'code', 'ok', 'scan_code', v_scan, 'verdict', v_verdict,
     'passed', v_pass, 'failed', v_fail, 'review', v_review, 'not_applicable', v_na, 'score', v_score,
     'case_status', 'In Progress');
+end;
+$$;
+
+-- ===========================================================================
+-- 10a. inspector_resolve_scan: the inspector settles the REVIEW rules of one package after checking the
+--      physical pack. Only rules still in REVIEW can be resolved, only to PASS or FAIL, only while the case
+--      is In Progress. The original automated outcome is kept on the rule; verdict and counts are
+--      re-computed here so the client can never inflate them.
+--      p_decisions: [{"id": "FS-02", "status": "PASS" | "FAIL", "note": "Green dot seen on the side panel"}]
+-- ===========================================================================
+create or replace function public.inspector_resolve_scan(p_token uuid, p_scan_code text, p_decisions jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_me      uuid;
+  v_dash    text;
+  v_name    text;
+  ps        public.package_scans%rowtype;
+  i         public.inspections%rowtype;
+  v_rules   jsonb;
+  v_applied integer := 0;
+  v_pass    integer;
+  v_fail    integer;
+  v_review  integer;
+  v_na      integer;
+  v_verdict text;
+  v_score   numeric;
+begin
+  select s.officer_uuid, s.dashboard into v_me, v_dash from public._session_officer(p_token) s;
+  if v_me is null then return jsonb_build_object('ok', false, 'code', 'session_expired'); end if;
+  if v_dash <> 'INSPECTOR' then return jsonb_build_object('ok', false, 'code', 'forbidden'); end if;
+  if p_decisions is null or jsonb_typeof(p_decisions) <> 'array' or jsonb_array_length(p_decisions) = 0
+     or jsonb_array_length(p_decisions) > 100 then
+    return jsonb_build_object('ok', false, 'code', 'bad_report');
+  end if;
+
+  select * into ps from public.package_scans where scan_code = btrim(coalesce(p_scan_code, '')) for update;
+  if not found then return jsonb_build_object('ok', false, 'code', 'not_found'); end if;
+  select * into i from public.inspections where id = ps.inspection_id and inspector_id = v_me;
+  if not found then return jsonb_build_object('ok', false, 'code', 'forbidden'); end if;
+  if i.status <> 'In Progress' then return jsonb_build_object('ok', false, 'code', 'bad_state'); end if;
+  select full_name into v_name from public.officers where id = v_me;
+
+  select coalesce(jsonb_agg(
+           case
+             when d.d is not null and r->>'status' = 'REVIEW' and d.d->>'status' in ('PASS', 'FAIL') then
+               r || jsonb_build_object(
+                 'status', d.d->>'status',
+                 'reason', 'Inspector ' || case d.d->>'status' when 'PASS' then 'confirmed compliance' else 'confirmed a violation' end
+                           || ' on the physical pack' || coalesce(': ' || nullif(left(btrim(d.d->>'note'), 300), ''), '.')
+                           || ' (automated check: ' || coalesce(r->>'reason', 'needs review') || ')',
+                 'resolution', jsonb_build_object('by', v_name, 'officer_uuid', v_me, 'at', now(), 'from', 'REVIEW',
+                                                  'note', nullif(left(btrim(d.d->>'note'), 300), '')))
+             else r
+           end order by o.n), '[]'::jsonb),
+         count(*) filter (where d.d is not null and r->>'status' = 'REVIEW' and d.d->>'status' in ('PASS', 'FAIL'))
+    into v_rules, v_applied
+    from jsonb_array_elements(coalesce(ps.report->'rules', '[]'::jsonb)) with ordinality o(r, n)
+    left join lateral (
+      select x as d from jsonb_array_elements(p_decisions) x where x->>'id' = o.r->>'id' limit 1
+    ) d on true;
+  if v_applied = 0 then return jsonb_build_object('ok', false, 'code', 'nothing_to_resolve'); end if;
+
+  select count(*) filter (where r->>'status' = 'PASS'),
+         count(*) filter (where r->>'status' = 'FAIL'),
+         count(*) filter (where r->>'status' = 'REVIEW'),
+         count(*) filter (where r->>'status' = 'NOT_APPLICABLE')
+    into v_pass, v_fail, v_review, v_na
+    from jsonb_array_elements(v_rules) r;
+  v_verdict := case when v_fail > 0 then 'Failed' when v_review > 0 then 'Under Review' else 'Passed' end;
+  v_score := case when v_pass + v_fail + v_review = 0 then 0
+                  else round(100.0 * v_pass / (v_pass + v_fail + v_review), 1) end;
+
+  update public.package_scans
+     set report = jsonb_set(jsonb_set(report, '{rules}', v_rules), '{summary}',
+                            coalesce(report->'summary', '{}'::jsonb) || jsonb_build_object(
+                              'verdict', case v_verdict when 'Failed' then 'FAIL' when 'Passed' then 'PASS' else 'REVIEW' end,
+                              'passed', v_pass, 'failed', v_fail, 'review', v_review, 'not_applicable', v_na, 'score', v_score,
+                              'resolved_by_inspector', true)),
+         verdict = v_verdict, rules_passed = v_pass, rules_failed = v_fail, rules_review = v_review, rules_na = v_na,
+         score = v_score, resolved_at = now()
+   where id = ps.id;
+
+  perform public._log_event(
+    i.id, 'Scan', 'Review items resolved',
+    ps.scan_code || ': ' || v_applied || ' rule(s) settled on the physical pack - now ' || v_verdict, v_me, 'Inspector');
+
+  return jsonb_build_object('ok', true, 'code', 'ok', 'scan_code', ps.scan_code, 'resolved', v_applied, 'verdict', v_verdict,
+                            'passed', v_pass, 'failed', v_fail, 'review', v_review, 'not_applicable', v_na, 'score', v_score);
 end;
 $$;
 
@@ -885,6 +999,7 @@ revoke all on function public.inspector_scan(uuid, text)                        
 revoke all on function public.inspector_history(uuid)                          from public;
 revoke all on function public.inspector_case_report(uuid, text)                 from public;
 revoke all on function public.inspector_save_scan(uuid, text, jsonb, text)      from public;
+revoke all on function public.inspector_resolve_scan(uuid, text, jsonb)         from public;
 revoke all on function public.inspector_submit_findings(uuid, text, text)       from public;
 
 grant execute on function public.inspector_overview(uuid, integer)              to anon, authenticated;
@@ -894,6 +1009,7 @@ grant execute on function public.inspector_scan(uuid, text)                     
 grant execute on function public.inspector_history(uuid)                        to anon, authenticated;
 grant execute on function public.inspector_case_report(uuid, text)              to anon, authenticated;
 grant execute on function public.inspector_save_scan(uuid, text, jsonb, text)   to anon, authenticated;
+grant execute on function public.inspector_resolve_scan(uuid, text, jsonb)      to anon, authenticated;
 grant execute on function public.inspector_submit_findings(uuid, text, text)    to anon, authenticated;
 
 -- ===========================================================================
@@ -925,7 +1041,8 @@ begin
     if p_h % 4 = 0 then v_review := v_review || pool_r[1 + ((p_h / 13) % 6)::int]; end if;
   end if;
 
-  for r in select * from public.compliance_rules order by sort_order loop
+  -- Demo history uses the 16 core rules every category shares
+  for r in select * from public.compliance_rules where id ~ '^LM-(0[1-9]|1[0-6])$' order by sort_order loop
     v_status := case
       when r.id = any (v_fail) then 'FAIL'
       when r.id = any (v_review) then 'REVIEW'

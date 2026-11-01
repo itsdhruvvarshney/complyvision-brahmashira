@@ -44,8 +44,72 @@ data class RuleResult(
     val reason: String,
     val expected: String,
     val found: String,
-    val evidence: List<String>
-)
+    val evidence: List<String>,
+    /** Rule section ("Price declaration", "Food safety (FSS)" ...) */
+    val section: String = category,
+    /** Why the rule applies to this product ("Food article", "Category: Edible oils & vanaspati") */
+    val applies: String = "",
+    /** Set when an inspector settled a REVIEW on the physical pack */
+    val resolvedBy: String = "",
+    val resolvedAt: String = ""
+) {
+    val resolved: Boolean get() = resolvedBy.isNotBlank()
+}
+
+data class CategoryEvidence(val source: String, val detail: String)
+data class CategoryRef(val id: String, val name: String, val score: Double)
+data class SectionStat(val section: String, val passed: Int, val failed: Int, val review: Int, val notApplicable: Int)
+
+/** How the rule engine categorised the package and which standards it therefore applied */
+data class Classification(
+    val categoryId: String,
+    val categoryName: String,
+    val groupName: String,
+    val confidence: Double,
+    /** "auto", "inspector" or "fallback" */
+    val source: String,
+    val evidence: List<CategoryEvidence>,
+    val alternatives: List<CategoryRef>,
+    val packageTypeId: String,
+    val packageTypeName: String,
+    val packageTypeRef: String,
+    val packageEvidence: String,
+    val laws: List<String>,
+    val quantityDims: List<String>,
+    val quantityRef: String,
+    val standardsLaw: String,
+    val gate: String,
+    val rulesApplied: Int,
+    val rulesInCatalog: Int,
+    val notRelevant: List<Pair<String, String>>
+) {
+    val setByInspector: Boolean get() = source == "inspector"
+    /** The categoriser asks the inspector to confirm below this confidence (mirrors classifier.CONFIDENT) */
+    val needsConfirmation: Boolean get() = source == "fallback" || (source == "auto" && confidence < 0.6)
+
+    companion object {
+        fun parse(c: JSONObject?): Classification? {
+            if (c == null) return null
+            val cat = c.optJSONObject("category") ?: return null
+            val pkg = c.optJSONObject("package_type") ?: JSONObject()
+            val qty = c.optJSONObject("quantity") ?: JSONObject()
+            return Classification(
+                categoryId = cat.str("id"), categoryName = cat.str("name"), groupName = c.str("group_name"),
+                confidence = c.dbl("confidence"), source = c.str("source").ifBlank { "auto" },
+                evidence = c.optJSONArray("evidence").jsonObjects().map { CategoryEvidence(it.str("source"), it.str("detail")) },
+                alternatives = c.optJSONArray("alternatives").jsonObjects().map { CategoryRef(it.str("id"), it.str("name"), it.dbl("score")) },
+                packageTypeId = pkg.str("id").ifBlank { "retail" }, packageTypeName = pkg.str("name").ifBlank { "Retail package" },
+                packageTypeRef = pkg.str("ref"), packageEvidence = pkg.str("evidence"),
+                laws = c.optJSONArray("laws").strings(),
+                quantityDims = qty.optJSONArray("dims").strings(), quantityRef = qty.str("ref"),
+                standardsLaw = c.optJSONObject("standards")?.str("law").orEmpty(),
+                gate = c.optJSONObject("gate")?.str("reason").orEmpty(),
+                rulesApplied = c.int("rules_applied"), rulesInCatalog = c.int("rules_in_catalog"),
+                notRelevant = c.optJSONArray("not_relevant").jsonObjects().map { it.str("id") to it.str("title") }
+            )
+        }
+    }
+}
 
 data class EvidenceItem(
     val id: String,
@@ -119,8 +183,12 @@ data class PackageReport(
     val crossChecks: List<CrossCheck>,
     val warnings: List<ReportWarning>,
     val pipeline: List<PipelineStage>,
-    val input: List<Pair<String, String>>
+    val input: List<Pair<String, String>>,
+    val classification: Classification? = null,
+    val sections: List<SectionStat> = emptyList()
 ) {
+    val reviewRules: List<RuleResult> get() = rules.filter { it.status == RuleStatus.REVIEW }
+
     /** "PASS" -> "Passed" etc., the vocabulary used everywhere else in the app */
     val verdictLabel: String get() = verdictLabel(verdict)
 
@@ -135,17 +203,23 @@ data class PackageReport(
             val byId = catalog.associateBy { it.id }
             val rules = o.optJSONArray("rules").jsonObjects().map { r ->
                 val c = byId[r.str("id")]
+                val category = r.str("category").ifBlank { c?.category.orEmpty() }
+                val resolution = r.optJSONObject("resolution")
                 RuleResult(
                     id = r.str("id"),
                     title = r.str("title").ifBlank { c?.title ?: r.str("id") },
                     reference = r.str("reference").ifBlank { c?.reference.orEmpty() },
-                    category = r.str("category").ifBlank { c?.category.orEmpty() },
+                    category = category,
                     severity = r.str("severity").ifBlank { c?.severity.orEmpty() },
                     status = r.str("status"),
                     reason = r.str("reason").ifBlank { defaultReason(r.str("status")) },
                     expected = r.str("expected"),
                     found = r.str("found"),
-                    evidence = r.optJSONArray("evidence").strings()
+                    evidence = r.optJSONArray("evidence").strings(),
+                    section = r.str("section").ifBlank { category },
+                    applies = r.str("applies"),
+                    resolvedBy = resolution?.str("by").orEmpty(),
+                    resolvedAt = resolution?.str("at").orEmpty()
                 )
             }
             val s = o.optJSONObject("summary") ?: JSONObject()
@@ -247,7 +321,16 @@ data class PackageReport(
                         "Dimensions" to "${it.int("width")} × ${it.int("height")} px",
                         "SHA-256" to it.str("sha256").take(16) + "…"
                     )
-                }.orEmpty()
+                }.orEmpty(),
+                classification = Classification.parse(o.optJSONObject("classification")),
+                sections = s.optJSONArray("sections").jsonObjects().map {
+                    SectionStat(it.str("section"), it.int("passed"), it.int("failed"), it.int("review"), it.int("not_applicable"))
+                }.ifEmpty {
+                    rules.groupBy { it.section }.map { (k, v) ->
+                        SectionStat(k, v.count { it.status == RuleStatus.PASS }, v.count { it.status == RuleStatus.FAIL },
+                            v.count { it.status == RuleStatus.REVIEW }, v.count { it.status == RuleStatus.NA })
+                    }
+                }
             )
         }
 
@@ -265,7 +348,7 @@ data class PackageReport(
             return when (verdict) {
                 RuleStatus.FAIL -> "Non-compliant: ${fails.firstOrNull().orEmpty()}" + if (fails.size > 1) " and ${fails.size - 1} more" else ""
                 RuleStatus.REVIEW -> "Needs review: ${reviews.firstOrNull().orEmpty()}" + if (reviews.size > 1) " and ${reviews.size - 1} more" else ""
-                else -> "All applicable Legal Metrology declarations verified"
+                else -> "All applicable rules verified"
             }
         }
 
@@ -298,6 +381,21 @@ data class PackageReport(
             }
             d.obj("generic_name")?.let { add("Generic name" to it.str("value")) }
             d.obj("fssai_license")?.let { add("FSSAI licence" to it.str("value")) }
+            d.obj("veg_mark")?.let { add("Veg / non-veg symbol" to if (it.str("kind") == "veg") "Vegetarian (green)" else "Non-vegetarian (brown)") }
+            d.obj("ingredients")?.let { add("Ingredients" to it.str("value").take(120)) }
+            d.obj("nutrition")?.let { add("Nutrition panel" to it.optJSONArray("nutrients").strings().joinToString(", ")) }
+            d.obj("importer")?.let { add("Importer" to it.str("address").ifBlank { it.str("name") }) }
+            listOf("drug" to "Drug licence", "cosmetic" to "Cosmetic licence", "ayush" to "AYUSH licence",
+                "medical_device" to "Device licence", "insecticide" to "Insecticide registration").forEach { (k, label) ->
+                d.obj("licence_$k")?.let { add(label to it.str("value")) }
+            }
+            d.obj("bis")?.let { b ->
+                val parts = b.optJSONArray("codes").strings() + listOfNotNull(b.str("cml").takeIf { it.isNotBlank() }?.let { "CM/L-$it" },
+                    b.str("crs").takeIf { it.isNotBlank() })
+                if (parts.isNotEmpty()) add("BIS certification" to parts.joinToString(", "))
+            }
+            d.obj("dimensions")?.let { add("Dimensions" to it.optJSONArray("values").strings().take(2).joinToString(", ")) }
+            d.obj("sheet_count")?.let { add("Usable sheets" to it.int("value").toString()) }
             if (d.has("category") && d.opt("category") is String) add("Category" to d.str("category"))
         }
 
@@ -625,6 +723,22 @@ object AnalyzerClient {
             val ai = o.optJSONObject("gemini") ?: JSONObject()
             AnalyzerHealth(o.optString("status") == "ok", o.str("version"), ocr.optBoolean("ready"), ocr.str("engine"),
                 ai.optBoolean("enabled"), ai.int("keys"))
+        } catch (e: AnalyzerException) {
+            throw e
+        } catch (e: Exception) {
+            throw translate(e)
+        } finally {
+            c.disconnect()
+        }
+    }
+
+    /** The analyzer's product taxonomy - used when the Supabase catalog has not been installed */
+    suspend fun categories(): CategoryCatalog = withContext(Dispatchers.IO) {
+        val c = open(resolve(), "/categories")
+        try {
+            c.connectTimeout = 5_000
+            c.readTimeout = 10_000
+            CategoryCatalog.parse(JSONObject(read(c)), "analyzer")
         } catch (e: AnalyzerException) {
             throw e
         } catch (e: Exception) {

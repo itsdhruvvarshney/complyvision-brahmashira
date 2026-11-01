@@ -14,8 +14,11 @@ Mobile camera / gallery
             │    PaddleOCR · conditional OCR verification · field + MRP extraction
             │    numeral glyph height (Rule 7) · local contrast analysis · evidence crop builder
             ├─ Gemini enrichment (pool of API keys, round-robin with cool-down)
-            └─ Compliance engine  ── prototype rule CSV + deterministic validators
-                                     → PASS / FAIL / REVIEW / NOT_APPLICABLE
+            ├─ Product categoriser ── 61 categories (categories.json): case record + label text + AI reader
+            │                         + regulatory fingerprints → category, confidence, package type
+            └─ Category rule engine ── 76-rule catalog (lm_rules.csv) narrowed to the category's rules,
+                                       Rule 3 / Rule 26 applicability gates, deterministic validators
+                                       → PASS / FAIL / REVIEW / NOT_APPLICABLE (+ inspector resolution)
   ◄─ Canonical JSON: declarations · rule results · evidence images · quality warnings · summary counts
 ```
 
@@ -73,10 +76,46 @@ Print `aruco_card_20mm.png` at 100 % scale and place it flat beside the label.
 
 ## API
 
-* `GET /health` – status, OCR readiness, Gemini key-pool status, limits.
-* `GET /rules` – the rule catalog (from `app/rules/lm_rules.csv`).
+* `GET /health` – status, OCR readiness, Gemini key-pool status, limits, catalog sizes.
+* `GET /categories` – the product taxonomy: governing laws, quantity measure, BIS standards, rule count.
+* `GET /rules` – the whole rule catalog; `GET /rules?category=edible_oil&package_type=retail` returns
+  only the rules that govern that category (and the ids that do not).
 * `POST /analyze` – multipart form: `image` (JPG / JPEG / PNG / WEBP) plus optional `case_code`,
-  `product_name`, `brand`, `category`, `declared_mrp`, `declared_quantity`, `marker_mm`, `source`.
+  `product_name`, `brand`, `category`, `declared_mrp`, `declared_quantity`, `marker_mm`, `source`,
+  `category_id` (inspector's choice; omit to auto-detect), `package_type` (`retail` / `wholesale` /
+  `institutional` / `export`; omit to read it from the label) and `pdp_area_cm2` (measured display
+  panel, used by the Rule 7 font-size check instead of the photo estimate).
+
+## Category-aware rule engine
+
+1. **Categorise.** `rules/classifier.py` scores every category in `rules/categories.json` from the
+   product name, the case category, the OCR text, the AI reader's category and regulatory fingerprints
+   (FSSAI number, `Mfg. Lic.` + IP/BP strength, CIR number, IS 14543 …). Below 60 % confidence the
+   report says so (`LM-00` → REVIEW) and the app asks the inspector to confirm before saving.
+2. **Select.** Each rule's `applies_to` selector (`tag:food`, `cat:edible_oil`, `-tag:lm_exempt` …)
+   and `scope` (`retail` / `wholesale` / `always`) pick the rules for the category and package type.
+   The rest are listed under `classification.not_relevant`.
+3. **Gate.** Rule 3 (over 25 kg / 'not for retail sale') and the Rule 26(a) small-pack exemption switch
+   the Chapter II declarations to NOT_APPLICABLE, except for tobacco and pan masala.
+4. **Verify.** Validators in `rules/engine.py` decide each rule with the reason, expected, found and the
+   label lines used as evidence. The AI reader can only move a FAIL to REVIEW; only an inspector can
+   settle a REVIEW (`inspector_resolve_scan` in Supabase).
+
+The catalog covers the LM (Packaged Commodities) Rules 2011 as amended up to the Fourth Amendment of
+21.09.2026 (unit sale price, Table-I font sizes by display-panel area, e-mail in consumer care,
+Fourth Schedule weight-with-volume for edible oils, pan-masala small-pack carve-out, optional veg dot on
+cosmetics), plus the FSS labelling regulations, COTPA, the Drugs and Cosmetics Rules, Cosmetics Rules,
+Medical Devices Rules, Insecticides Rules, FCO, Seeds Act and the BIS Quality Control Orders. Sources
+and the deliberate limits of photo-based checking are in `app/rules/SOURCES.md`.
+
+To change the catalog, edit `lm_rules.csv` / `categories.json`, run the tests, then regenerate the
+database copy:
+
+```bash
+python tools/export_catalog_sql.py     # writes ../supabase/rule_engine.sql
+```
+
+Run `supabase/rule_engine.sql` after `inspector_module.sql` in the Supabase SQL editor.
 
 Errors return `{"code": ..., "message": ...}`: `415 unsupported_type / mime_mismatch`, `413 too_large`,
 `400 corrupt_image / too_small`, `401 unauthorized`, `503 ocr_unavailable`, `504 timeout`.
@@ -86,7 +125,9 @@ Errors return `{"code": ..., "message": ...}`: `415 unsupported_type / mime_mism
 * Package verdict: any **FAIL** → Failed; otherwise any **REVIEW** → Under Review; otherwise Passed.
 * A missing declaration is a FAIL only on a good capture. On a poor capture, or when Gemini reports
   seeing it, the rule goes to REVIEW for the inspector to confirm. Gemini never passes a rule.
-* `rules/lm_rules.csv` mirrors `public.compliance_rules` in Supabase (`supabase/inspector_module.sql`).
+* `rules/lm_rules.csv` and `rules/categories.json` mirror `public.compliance_rules` and
+  `public.product_categories` in Supabase (`supabase/rule_engine.sql`, generated).
+* A category the engine is unsure of is never saved silently: the inspector confirms or changes it.
 
 ## Tests
 

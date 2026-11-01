@@ -43,7 +43,9 @@ import java.util.Locale
 
 internal val ViolationCatalog = listOf(
     "Short net quantity", "MRP overcharging", "Missing mandatory declaration", "Unverified weighing scale",
-    "Tampered stamping seal", "Unsealed or damaged packaging", "Incorrect manufacture date", "Misleading quantity claim"
+    "Tampered stamping seal", "Unsealed or damaged packaging", "Incorrect manufacture date", "Misleading quantity claim",
+    "Incorrect unit sale price", "Dual or altered MRP", "Missing statutory warning", "Missing licence / certification",
+    "Illegible declaration", "Export pack on domestic sale"
 )
 
 private val TimeSlots = listOf("09:30", "11:00", "14:00", "16:00")

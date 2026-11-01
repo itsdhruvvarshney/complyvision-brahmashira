@@ -68,16 +68,24 @@ def test_full_pipeline_on_synthetic_label():
     engine = FakeEngine(texts)
     report = analyze(encode(tilted), "pack.jpg", "image/jpeg", CONTEXT, engine, None, Settings(), today=TODAY)
 
-    assert report["schema"] == "complyvision.package-report/1.0"
+    assert report["schema"] == "complyvision.package-report/1.1"
     assert report["input"]["mime"] == "image/jpeg"
     assert report["calibration"]["detected"]
     assert report["ocr"]["lines"] == len(texts)
+    # Categorised first, then only the category's rules are evaluated
+    cl = report["classification"]
+    assert cl["category"]["id"] == "food_grains" and cl["package_type"]["id"] == "retail"
+    assert cl["rules_applied"] == len(report["rules"]) < cl["rules_in_catalog"]
+    assert {n["id"] for n in cl["not_relevant"]} & {"CS-01", "TB-01", "DR-02"}
     rules = {r["id"]: r for r in report["rules"]}
-    assert len(rules) == 16
+    assert all(r["section"] and r["applies"] for r in report["rules"])
     # The synthetic label is fully compliant
     assert {k: r["status"] for k, r in rules.items() if r["status"] not in ("PASS", "NOT_APPLICABLE")} == {}
     assert rules["LM-11"]["status"] == "PASS", rules["LM-11"]          # measured with the ArUco scale
-    assert rules["LM-11"]["found"].endswith("mm")
+    assert "mm" in rules["LM-11"]["found"]
+    assert report["measurements"]["pdp"]["source"] == "estimated"
+    assert rules["FS-02"]["status"] == "PASS", rules["FS-02"]          # green veg symbol detected from pixels
+    assert report["measurements"]["veg_mark"]["kind"] == "veg"
     assert report["summary"]["verdict"] == "PASS" and report["summary"]["failed"] == 0
     # Evidence mapping: every rule that used a field points at a crop that exists
     ids = {e["id"] for e in report["evidence"]}
@@ -85,7 +93,9 @@ def test_full_pipeline_on_synthetic_label():
     assert all(e["image"].startswith("data:image/jpeg;base64,") for e in report["evidence"])
     assert report["annotated_image"].startswith("data:image/jpeg;base64,")
     assert [s["stage"] for s in report["pipeline"]] == [
-        "validate", "quality", "preprocess", "calibration", "enhance", "ocr", "rescue", "verify", "extract", "measure", "ai", "rules", "evidence"]
+        "validate", "quality", "preprocess", "calibration", "enhance", "ocr", "rescue", "verify", "extract", "measure", "ai",
+        "classify", "rules", "evidence"]
+    assert {s["section"] for s in report["summary"]["sections"]} >= {"Mandatory declaration", "Food safety (FSS)"}
     assert any(s["step"] == "deskew" and s["applied"] for s in report["preprocessing"])
 
 
@@ -105,11 +115,20 @@ def test_api(monkeypatch):
     monkeypatch.setattr(main, "get_engine", lambda *a, **k: FakeEngine(texts))
     client = TestClient(main.app)
     assert client.get("/health").json()["status"] == "ok"
-    assert len(client.get("/rules").json()["rules"]) == 16
+    assert len(client.get("/rules").json()["rules"]) >= 70
+    cats = client.get("/categories").json()
+    assert len(cats["categories"]) >= 55 and any(c["id"] == "edible_oil" and c["rules"] > 20 for c in cats["categories"])
+    oil = client.get("/rules", params={"category": "edible_oil"}).json()
+    assert "LM-26" in {r["id"] for r in oil["rules"]} and "CS-01" in oil["not_relevant"]
+    assert client.get("/rules", params={"category": "nope"}).status_code == 404
 
     ok = client.post("/analyze", files={"image": ("pack.jpg", encode(img), "image/jpeg")}, data=CONTEXT)
     assert ok.status_code == 200, ok.text
     assert ok.json()["summary"]["verdict"] in ("PASS", "REVIEW")
+    forced = client.post("/analyze", files={"image": ("pack.jpg", encode(img), "image/jpeg")},
+                         data={**CONTEXT, "category_id": "pulses"})
+    assert forced.json()["classification"]["category"]["id"] == "pulses"
+    assert forced.json()["classification"]["source"] == "inspector"
 
     bad = client.post("/analyze", files={"image": ("pack.gif", b"GIF89a" + b"\x00" * 100, "image/gif")})
     assert bad.status_code == 415 and bad.json()["code"] == "unsupported_type"

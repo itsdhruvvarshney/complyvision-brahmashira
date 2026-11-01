@@ -19,22 +19,27 @@ import cv2
 import numpy as np
 
 from .config import ANALYZER_VERSION, Settings
-from .extract.fields import expected_from_context, extract, fix_number, quantity_from_text
+from .extract.fields import expected_from_context, extract, fix_number, normalise_text, quantity_from_text
+from .extract.label import extract_label_facts
 from .ocr.rescue import needs_rescue, rescue
 from .ocr.verify import verify_lines
+from .rules import catalog
 from .rules import engine as rules_engine
+from .rules.classifier import classify
 from .validation import validate_image
 from .vision import evidence as evidence_mod
 from .vision.aruco import calibrate
-from .vision.measure import local_contrast, numeral_height, required_numeral_height_mm
+from .vision.measure import estimate_pdp_area_cm2, local_contrast, numeral_height, required_numeral_height_mm
 from .vision.preprocess import correct_geometry, correct_photometry
 from .vision.quality import assess
+from .vision.symbols import detect_veg_mark
 
 log = logging.getLogger("analyzer.pipeline")
 
-SCHEMA = "complyvision.package-report/1.0"
+SCHEMA = "complyvision.package-report/1.1"
 STATUS_RANK = {"FAIL": 3, "REVIEW": 2, "PASS": 1, "NOT_APPLICABLE": 0}
 CONTRAST_FIELDS = ("mrp", "net_quantity", "mfg_date", "best_before", "manufacturer", "customer_care")
+HEIGHT_FIELDS = ("net_quantity", "mrp")
 
 
 class AnalysisAbandoned(Exception):
@@ -78,10 +83,19 @@ def request_workspace(settings: Settings):
 
 def _clean_context(raw: dict) -> dict:
     ctx = {}
-    for key in ("case_code", "product_name", "brand", "category", "declared_quantity", "source"):
+    for key in ("case_code", "product_name", "brand", "category", "declared_quantity", "source", "category_id", "package_type"):
         value = raw.get(key)
         if isinstance(value, str) and value.strip():
             ctx[key] = re.sub(r"\s+", " ", value.strip())[:120]
+    if ctx.get("category_id") and not catalog.load_taxonomy().get(ctx["category_id"]):
+        ctx.pop("category_id")  # unknown ids fall back to auto-detection
+    if raw.get("pdp_area_cm2") not in (None, ""):
+        try:
+            area = float(raw["pdp_area_cm2"])
+            if 1 <= area <= 20000:
+                ctx["pdp_area_cm2"] = area
+        except (TypeError, ValueError):
+            pass
     if raw.get("declared_mrp") not in (None, ""):
         mrp = fix_number(str(raw["declared_mrp"]))
         if mrp is not None and mrp > 0:
@@ -191,18 +205,43 @@ def analyze(data: bytes, filename: str | None, declared_mime: str | None, raw_co
 
         with timer.stage("extract", "Field extraction"):
             decl = extract(lines, context, today)
+            texts = [normalise_text(ln.text) for ln in lines]
+            decl.update(extract_label_facts(lines, texts, decl))
             expected = expected_from_context(context)
             if context.get("product_name"):
                 expected["product_words"] = context["product_name"]
 
-        with timer.stage("measure", "Glyph height & local contrast"):
-            boxes = evidence_mod.field_boxes(decl, lines)
+        with timer.stage("measure", "Glyph height, contrast & symbols"):
             measurements: dict = {}
-            q = decl.get("net_quantity")
-            if q and q.get("base_unit") in ("g", "ml"):
-                measurements["numeral_required_mm"] = required_numeral_height_mm(q["base_value"])
-                if calibration.get("detected") and q.get("lines"):
-                    measurements["numeral_height"] = numeral_height(processed, lines[q["lines"][0]], calibration["px_per_mm"])
+            veg = detect_veg_mark(processed)
+            measurements["veg_mark"] = veg
+            if veg.get("found"):
+                decl["veg_mark"] = {"kind": veg["kind"], "box": veg["box"], "confidence": veg["score"], "lines": []}
+            boxes = evidence_mod.field_boxes(decl, lines)
+            if veg.get("found"):
+                boxes["veg_mark"] = tuple(veg["box"])
+            if decl.get("net_quantity"):
+                pdp = None
+                if context.get("pdp_area_cm2"):
+                    pdp = {"area_cm2": context["pdp_area_cm2"], "source": "entered by inspector"}
+                elif calibration.get("detected"):
+                    est = estimate_pdp_area_cm2(lines, processed.shape, calibration["px_per_mm"])
+                    if est:
+                        pdp = {"area_cm2": est["estimate_cm2"], "source": "estimated", **est}
+                if pdp:
+                    measurements["pdp"] = pdp
+                    measurements["numeral_required_mm"] = required_numeral_height_mm(pdp["area_cm2"])
+                if calibration.get("detected"):
+                    heights = []
+                    for key in HEIGHT_FIELDS:
+                        f = decl.get(key)
+                        if f and f.get("lines"):
+                            h = numeral_height(processed, lines[f["lines"][0]], calibration["px_per_mm"])
+                            if h:
+                                heights.append({**h, "field": key})
+                    if heights:
+                        measurements["numeral_height"] = min(heights, key=lambda x: x["height_mm"])
+                        measurements["numeral_heights"] = heights
             contrast = {}
             for key in CONTRAST_FIELDS:
                 field_value = decl.get(key)
@@ -222,33 +261,56 @@ def analyze(data: bytes, filename: str | None, declared_mime: str | None, raw_co
                 st["status"] = "skipped"
 
         mean_conf = float(np.mean([ln.confidence for ln in lines])) if lines else 0.0
-        with timer.stage("rules", "Compliance rule engine"):
+        taxonomy = catalog.load_taxonomy()
+        with timer.stage("classify", "Product categorisation"):
+            classification = classify(taxonomy, context, "\n".join(texts), ai if ai.get("available") else {})
+            category = classification["category"]
+            package = classification["package_type"]["id"]
+            selected, skipped = catalog.select_rules(rules, category, package)
+
+        with timer.stage("rules", "Category rule engine"):
             ctx = rules_engine.RuleContext(
                 decl=decl, quality=quality, calibration=calibration, measurements=measurements, expected=expected,
                 ai=ai if ai.get("available") else {}, ocr_mean_confidence=mean_conf, ocr_line_count=len(lines),
-                require_calibration=settings.require_calibration, today=today)
-            results = rules_engine.evaluate(rules, ctx)
+                require_calibration=settings.require_calibration, today=today, category=category,
+                classification=classification, package_type=package, texts=texts, context=context)
+            results = rules_engine.evaluate(selected, ctx)
+            gate = rules_engine.scope_gate(ctx)
 
         with timer.stage("evidence", "Evidence crop builder"):
             field_status: dict[str, str] = {}
             field_rules: dict[str, list[str]] = {}
+            labels: dict[str, str] = {}
             for rule, outcome in results:
-                for f in outcome.fields:
+                keys = list(outcome.fields)
+                if outcome.lines and not outcome.fields:
+                    # Rule-specific text (warnings, licence numbers ...) gets its own crop
+                    key = f"rule:{rule.id}"
+                    box = evidence_mod.union_box([lines[i].box for i in outcome.lines if 0 <= i < len(lines)])
+                    if box:
+                        boxes[key] = box
+                        labels[key] = rule.title
+                        keys = [key]
+                for f in keys:
                     field_rules.setdefault(f, []).append(rule.id)
                     if STATUS_RANK[outcome.status] > STATUS_RANK.get(field_status.get(f, "NOT_APPLICABLE"), 0) or f not in field_status:
                         field_status[f] = outcome.status
+                outcome.fields = keys
             if calibration.get("detected"):
                 boxes["calibration"] = tuple(calibration["box"])
             confidences = {k: float((decl.get(k) or {}).get("confidence", 1.0 if k == "calibration" else 0.0)) for k in boxes}
-            evidence, evidence_ids = evidence_mod.build(processed, boxes, field_status, field_rules, confidences)
+            for key in labels:
+                confidences[key] = mean_conf
+            evidence, evidence_ids = evidence_mod.build(processed, boxes, field_status, field_rules, confidences, labels)
             annotated = evidence_mod.annotate(processed, evidence)
 
         rule_rows = []
         for rule, outcome in results:
             rule_rows.append({
                 "id": rule.id, "title": rule.title, "reference": rule.reference, "category": rule.category,
-                "severity": rule.severity, "status": outcome.status, "reason": outcome.reason,
+                "section": rule.section, "severity": rule.severity, "status": outcome.status, "reason": outcome.reason,
                 "expected": outcome.expected, "found": outcome.found,
+                "applies": rules_engine.applicability(rule, category, taxonomy.tag_glossary),
                 "evidence": sorted({evidence_ids[f] for f in outcome.fields if f in evidence_ids}),
             })
 
@@ -275,13 +337,33 @@ def analyze(data: bytes, filename: str | None, declared_mime: str | None, raw_co
         "duration_ms": int((time.perf_counter() - started) * 1000),
         "input": image.describe(),
         "context": context,
+        "classification": {
+            "category": category.summary(),
+            "group_name": taxonomy.groups.get(category.group, category.group),
+            "confidence": classification["confidence"],
+            "source": classification["source"],
+            "evidence": classification["evidence"],
+            "alternatives": classification["alternatives"],
+            "package_type": classification["package_type"],
+            "laws": list(category.laws),
+            "tags": sorted(category.tags),
+            "quantity": dict(zip(("dims", "ref"), category.dims_for(" ".join([context.get("product_name") or "", ocr_text[:600]])))),
+            "standards": category.standards or None,
+            "gate": gate,
+            "taxonomy_version": taxonomy.version,
+            "rules_applied": len(selected),
+            "rules_in_catalog": len(rules),
+            "not_relevant": [{"id": r.id, "title": r.title, "section": r.section} for r in skipped],
+        },
         "summary": {
             "verdict": overall,
             "passed": counts["PASS"], "failed": counts["FAIL"], "review": counts["REVIEW"],
             "not_applicable": counts["NOT_APPLICABLE"],
             "score": round(100.0 * counts["PASS"] / applicable, 1) if applicable else 0.0,
             "critical_failures": [r["id"] for r in rule_rows if r["status"] == "FAIL" and r["severity"] == "Critical"],
-            "headline": _headline(overall, rule_rows),
+            "headline": _headline(overall, rule_rows, category.name),
+            "category": category.name,
+            "sections": _sections(rule_rows),
         },
         "quality": quality,
         "preprocessing": steps,
@@ -312,11 +394,20 @@ def _limit(img: np.ndarray, long_edge: int) -> np.ndarray:
     return cv2.resize(img, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA) if s < 1 else img
 
 
-def _headline(verdict: str, rows: list[dict]) -> str:
+def _sections(rows: list[dict]) -> list[dict]:
+    out: dict[str, dict] = {}
+    for r in rows:
+        s = out.setdefault(r["section"], {"section": r["section"], "PASS": 0, "FAIL": 0, "REVIEW": 0, "NOT_APPLICABLE": 0})
+        s[r["status"]] += 1
+    return [{"section": s["section"], "passed": s["PASS"], "failed": s["FAIL"], "review": s["REVIEW"], "not_applicable": s["NOT_APPLICABLE"]}
+            for s in out.values()]
+
+
+def _headline(verdict: str, rows: list[dict], category: str = "") -> str:
     fails = [r["title"] for r in rows if r["status"] == "FAIL"]
     reviews = [r["title"] for r in rows if r["status"] == "REVIEW"]
     if verdict == "FAIL":
         return f"Non-compliant: {fails[0]}" + (f" and {len(fails) - 1} more" if len(fails) > 1 else "")
     if verdict == "REVIEW":
         return f"Needs review: {reviews[0]}" + (f" and {len(reviews) - 1} more" if len(reviews) > 1 else "")
-    return "All applicable Legal Metrology declarations verified"
+    return f"All {len([r for r in rows if r['status'] == 'PASS'])} applicable rules verified" + (f" for {category.lower()}" if category else "")

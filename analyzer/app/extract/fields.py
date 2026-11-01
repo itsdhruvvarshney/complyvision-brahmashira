@@ -98,8 +98,14 @@ UNITS = {
     "ml": ("ml", 1.0, True), "mls": ("ml", 1.0, False), "cl": ("ml", 10.0, True),
     "n": ("count", 1.0, True), "nos": ("count", 1.0, False), "pcs": ("count", 1.0, False), "pieces": ("count", 1.0, True),
     "u": ("count", 1.0, True), "unit": ("count", 1.0, True), "units": ("count", 1.0, True),
+    "pair": ("count", 1.0, True), "pairs": ("count", 1.0, True), "sets": ("count", 1.0, True),
+    "mm": ("cm", 0.1, True), "cm": ("cm", 1.0, True), "m": ("cm", 100.0, True),
+    "mtr": ("cm", 100.0, False), "mtrs": ("cm", 100.0, False), "metre": ("cm", 100.0, True), "metres": ("cm", 100.0, True),
+    "meter": ("cm", 100.0, True), "meters": ("cm", 100.0, True),
 }
-_UNIT_RX = r"(kgs?|gms?|grams?|gr|mg|g|ltrs?|litres?|liters?|l|mls?|ml|cl|nos|pcs|pieces|units?|n|u)"
+_UNIT_RX = r"(kgs?|gms?|grams?|gr|mg|g|ltrs?|litres?|liters?|l|mls?|ml|cl|mm|cm|mtrs?|metres?|meters?|m|nos|pcs|pieces|pairs?|sets|units?|n|u)"
+# Physical dimension of each base unit (Rule 12(2): mass, volume, number, length)
+DIMENSION = {"g": "mass", "ml": "volume", "count": "number", "cm": "length"}
 QTY = re.compile(r"(?<![\d.])([0-9][0-9OoIl]*(?:[.,][0-9]+)?)\s*" + _UNIT_RX + r"\b", re.I)
 NETQ_LABEL = re.compile(
     r"(net\s*(?:qty|quantity|wt|weight|vol|volume|content|contents|mass)\w*\.?|\bn\.?\s*wt\.?|\bnet\b)", re.I)
@@ -216,7 +222,17 @@ def quantity_from_text(text: str) -> dict | None:
         return None
     base, factor, standard = UNITS[unit]
     return {"value": value, "unit": m.group(2), "base_unit": base, "base_value": round(value * factor, 3),
-            "standard_symbol": standard}
+            "standard_symbol": standard, "dimension": DIMENSION[base]}
+
+
+def quantities_in(text: str) -> list[dict]:
+    """Every quantity token in the text, in order (used for 'Net Vol 1 L (910 g)' style dual declarations)."""
+    out = []
+    for m in QTY.finditer(text or ""):
+        q = quantity_from_text(m.group(0))
+        if q:
+            out.append(q)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +263,16 @@ def extract(lines: list[OcrLine], context: dict | None = None, today: date | Non
             break
         if mrp:
             break
+    # Every distinct MRP on the label (a second, different MRP points to an over-sticker or a dual MRP)
+    mrp_all: dict[float, list[int]] = {}
+    for i, t in enumerate(texts):
+        for m in MRP_LABEL.finditer(t):
+            pm = PRICE_AFTER_LABEL.match(t[m.end():])
+            value = fix_number(pm.group(2)) if pm else None
+            tail = t[m.end() + pm.end():m.end() + pm.end() + 12] if pm else ""
+            if value and value > 0 and not re.match(r"\s*(/|per)\s*(1\s*)?(kg|g|l|ml|100)", tail, re.I):
+                mrp_all.setdefault(round(value, 2), []).append(i)
+    out["mrp_all"] = [{"value": v, "lines": sorted(set(ix))} for v, ix in mrp_all.items()]
     if mrp is None:  # price with currency on a line that also says "price"
         for joined, idx in _windows(texts, 1):
             if re.search(r"price", joined, re.I) and not re.search(r"unit", joined, re.I):
@@ -296,6 +322,13 @@ def extract(lines: list[OcrLine], context: dict | None = None, today: date | Non
         if candidates:
             _, i, q = max(candidates)  # the most prominent (tallest) quantity on the label
             netq = Found(q, texts[i], [i], lines[i].confidence, {"labelled": False})
+    if netq is not None:
+        # Supplementary quantities next to the declaration ("Net Vol 1 L (910 g)", "10 x 10 g")
+        near = sorted({j for i in netq.lines for j in (i - 1, i, i + 1) if 0 <= j < len(texts)})
+        netq.extra["also"] = [{k: q[k] for k in ("value", "unit", "base_unit", "base_value", "dimension")}
+                              for j in near for q in quantities_in(texts[j])
+                              if not NUTRITION_CONTEXT.search(texts[j])]
+        netq.extra["window"] = near
     out["net_quantity"] = netq.to_json() if netq else None
 
     # ---- Dates -------------------------------------------------------------

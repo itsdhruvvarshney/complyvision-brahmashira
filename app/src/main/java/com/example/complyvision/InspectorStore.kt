@@ -31,6 +31,10 @@ class InspectorStore(
     var analyzer by mutableStateOf<AnalyzerHealth?>(null); private set
     var analyzerError by mutableStateOf<String?>(null); private set
 
+    /** Product taxonomy for the category picker: Supabase first, the analyzer's copy as a fallback */
+    var categories by mutableStateOf<CategoryCatalog?>(null); private set
+    private var categoriesJob: Job? = null
+
     var syncedAt by mutableLongStateOf(0L); private set
     var toast by mutableStateOf<Toast?>(null); private set
 
@@ -114,6 +118,22 @@ class InspectorStore(
         }
     }
 
+    fun loadCategories() {
+        if (categories != null || categoriesJob?.isActive == true) return
+        categoriesJob = scope.launch {
+            categories = try {
+                InspectorRepository.categories(token)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: SessionExpiredException) {
+                handle(e)
+                return@launch
+            } catch (e: Exception) {
+                try { AnalyzerClient.categories() } catch (_: AnalyzerException) { null }
+            }
+        }
+    }
+
     // ---- One-off reads (errors propagate; an expired session also signs out) ----
 
     private suspend fun <T> guarded(block: suspend () -> T): T = try {
@@ -140,6 +160,9 @@ class InspectorStore(
         if (result is ActionResult.Done) loadAll(silent = true)
         return result
     }
+
+    suspend fun resolveScan(scanCode: String, decisions: List<RuleDecision>): ActionResult =
+        mutate { InspectorRepository.resolveScan(token, scanCode, decisions) }
 
     suspend fun saveScan(code: String, report: org.json.JSONObject, source: String): SaveScanResult {
         val result = try {

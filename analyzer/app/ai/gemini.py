@@ -66,7 +66,9 @@ and return ONLY a JSON object with these keys:
   "batch_no": string|null, "manufacturer": string|null, "customer_care": string|null,
   "declarations_seen": {"manufacturer": bool, "country_of_origin": bool, "generic_name": bool,
      "net_quantity": bool, "mfg_date": bool, "mrp": bool, "tax_inclusive": bool,
-     "unit_sale_price": bool, "customer_care": bool, "best_before": bool},
+     "unit_sale_price": bool, "customer_care": bool, "best_before": bool, "batch_no": bool,
+     "fssai_licence": bool, "ingredients": bool, "nutrition": bool},
+  "veg_mark": "veg"|"non_veg"|null, "tobacco_warning_coverage_pct": number|null,
   "ingredients_summary": string|null, "allergens": [string], "nutrition_highlights": [string],
   "claims": [string], "certifications": [string], "storage_instructions": string|null,
   "consumer_advisory": [string], "regulatory_observations": [string],
@@ -76,6 +78,10 @@ and return ONLY a JSON object with these keys:
 
 Rules: "declarations_seen.X" is true only if you can actually see that declaration on the label.
 Do not guess values you cannot read - use null. Keep every list item under 160 characters.
+"category" is the plain commodity type (e.g. "edible oil", "toothpaste", "LED bulb", "cigarettes",
+"paracetamol tablets"). "veg_mark" is set only if you can see the green (vegetarian) or brown
+(non-vegetarian) square-and-dot symbol. "tobacco_warning_coverage_pct" is your estimate of the share
+of the visible front panel covered by the pictorial health warning, for tobacco packs only.
 "regulatory_observations" should point out Legal Metrology concerns you notice (missing or unclear
 declarations, non-standard unit symbols, price formatting); "consumer_advisory" is plain-language
 guidance for the shopper. "summary" is two sentences at most.
@@ -171,4 +177,6 @@ def _parse(payload: dict) -> dict:
             data[key] = []
     if not isinstance(data.get("declarations_seen"), dict):
         data["declarations_seen"] = {}
+    if data.get("veg_mark") not in ("veg", "non_veg"):
+        data["veg_mark"] = None
     return data

@@ -9,20 +9,43 @@ import numpy as np
 
 from ..ocr.engine import OcrLine
 
-# LM (PC) Rules 2011, Rule 7: minimum height of net-quantity numerals (normal printing)
+# LM (PC) Rules 2011, Rule 7(2), Table-I as substituted by G.S.R. 629(E) (2017) with corrigendum
+# G.S.R. 1373(E): minimum height of numerals and letters by principal display panel area (cm²) -
+# (upper bound of the band, normal printing mm, blown / formed / moulded on the container mm)
 NUMERAL_HEIGHT_TABLE = (
-    (50.0, 1.0),      # up to 50 g / ml
-    (200.0, 2.0),     # above 50 up to 200
-    (1000.0, 4.0),    # above 200 up to 1000
-    (float("inf"), 6.0),  # above 1 kg / 1 L
+    (50.0, 1.0, 2.0),
+    (100.0, 1.5, 3.0),
+    (500.0, 2.5, 4.0),
+    (2500.0, 4.0, 6.0),
+    (float("inf"), 6.0, 6.0),
 )
 
 
-def required_numeral_height_mm(base_value: float) -> float:
-    for limit, mm in NUMERAL_HEIGHT_TABLE:
-        if base_value <= limit:
-            return mm
+def required_numeral_height_mm(pdp_area_cm2: float, moulded: bool = False) -> float:
+    for limit, normal, blown in NUMERAL_HEIGHT_TABLE:
+        if pdp_area_cm2 <= limit:
+            return blown if moulded else normal
     return 6.0
+
+
+def estimate_pdp_area_cm2(lines: list[OcrLine], image_shape, px_per_mm: float) -> dict | None:
+    """Principal display panel area from the calibrated photo (Rule 7(4)).
+
+    The label text block (padded by 10 % on each side, never beyond the photo) is a conservative lower
+    bound of the panel the declarations sit on; the whole cropped photo is the upper bound.
+    """
+    if px_per_mm <= 0 or not lines:
+        return None
+    h, w = image_shape[:2]
+    x0 = min(ln.box[0] for ln in lines)
+    y0 = min(ln.box[1] for ln in lines)
+    x1 = max(ln.box[0] + ln.box[2] for ln in lines)
+    y1 = max(ln.box[1] + ln.box[3] for ln in lines)
+    bw, bh = (x1 - x0) * 1.2, (y1 - y0) * 1.2
+    bw, bh = min(bw, w), min(bh, h)
+    to_cm2 = 1.0 / (px_per_mm * px_per_mm) / 100.0
+    return {"estimate_cm2": round(bw * bh * to_cm2, 1), "frame_cm2": round(w * h * to_cm2, 1),
+            "width_cm": round(bw / px_per_mm / 10, 1), "height_cm": round(bh / px_per_mm / 10, 1), "method": "label text block"}
 
 
 def _crop(img: np.ndarray, box, pad_ratio: float = 0.15) -> tuple[np.ndarray, int, int]:

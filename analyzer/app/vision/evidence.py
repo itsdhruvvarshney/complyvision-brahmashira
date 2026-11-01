@@ -31,6 +31,10 @@ FIELD_LABELS = {
     "batch_no": "Batch / lot number",
     "fssai_license": "FSSAI licence",
     "calibration": "ArUco calibration marker",
+    "veg_mark": "Veg / non-veg symbol",
+    "ingredients": "Ingredient list",
+    "nutrition": "Nutritional information",
+    "allergens": "Allergen declaration",
 }
 
 
@@ -73,9 +77,12 @@ def field_boxes(decl: dict, lines) -> dict[str, tuple[int, int, int, int]]:
 
 
 def build(img: np.ndarray, boxes: dict[str, tuple], field_status: dict[str, str], field_rules: dict[str, list[str]],
-          confidences: dict[str, float]) -> tuple[list[dict], dict[str, str]]:
+          confidences: dict[str, float], labels: dict[str, str] | None = None) -> tuple[list[dict], dict[str, str]]:
     evidence, ids = [], {}
+    labels = labels or {}
     h, w = img.shape[:2]
+    # Only regions a rule relied on (or the calibration marker) become evidence
+    boxes = {k: v for k, v in boxes.items() if k in field_rules or k == "calibration"}
     for n, (key, (x, y, bw, bh)) in enumerate(sorted(boxes.items(), key=lambda kv: (kv[1][1], kv[1][0])), start=1):
         pad = max(10, int(bh * 0.35))
         x0, y0 = max(0, x - pad), max(0, y - pad)
@@ -88,7 +95,7 @@ def build(img: np.ndarray, boxes: dict[str, tuple], field_status: dict[str, str]
         evidence.append({
             "id": eid,
             "field": key,
-            "label": FIELD_LABELS.get(key, key.replace("_", " ").title()),
+            "label": labels.get(key) or FIELD_LABELS.get(key, key.replace("_", " ").title()),
             "rule_ids": sorted(field_rules.get(key, [])),
             "status": field_status.get(key),
             "box": [int(x), int(y), int(bw), int(bh)],

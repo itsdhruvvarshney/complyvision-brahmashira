@@ -1,8 +1,9 @@
 """ComplyVision Package Analyzer - FastAPI service.
 
-    GET  /health   liveness + OCR / Gemini readiness
-    GET  /rules    the rule catalog the engine evaluates
-    POST /analyze  multipart image (+ optional case context) -> canonical JSON report
+    GET  /health       liveness + OCR / Gemini readiness
+    GET  /categories   the product taxonomy (category -> laws, quantity measure, rule count)
+    GET  /rules        the rule catalog; ?category=<id>&package_type=<id> returns the rules that apply
+    POST /analyze      multipart image (+ optional case context) -> canonical JSON report
 """
 
 from __future__ import annotations
@@ -24,13 +25,15 @@ from .ai.gemini import GeminiClient
 from .config import ANALYZER_VERSION, settings
 from .ocr.engine import OcrUnavailable, engine_status, get_engine
 from .pipeline import analyze
-from .rules.engine import load_rules
+from .rules.catalog import load_taxonomy, select_rules
+from .rules.engine import applicability, load_rules
 from .validation import ImageValidationError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("analyzer")
 
 RULES = load_rules()
+TAXONOMY = load_taxonomy()
 gemini = GeminiClient(settings.gemini_keys, settings.gemini_model, settings.gemini_timeout_s, settings.gemini_enabled)
 executor = ThreadPoolExecutor(max_workers=settings.workers, thread_name_prefix="analyze")
 _started = time.time()
@@ -83,13 +86,42 @@ def health() -> dict:
         "gemini": gemini.status(),
         "limits": {"max_upload_mb": settings.max_upload_mb, "types": ["image/jpeg", "image/png", "image/webp"]},
         "rules": len(RULES),
+        "categories": len(TAXONOMY.categories),
+        "taxonomy_version": TAXONOMY.version,
     }
 
 
+def _rule_json(r, cat=None) -> dict:
+    out = {"id": r.id, "title": r.title, "reference": r.reference, "category": r.category, "section": r.section,
+           "severity": r.severity, "scope": r.scope, "applies_to": " ".join(r.applies_to), "description": r.description}
+    if cat is not None:
+        out["applies"] = applicability(r, cat, TAXONOMY.tag_glossary)
+    return out
+
+
+@app.get("/categories")
+def categories() -> dict:
+    items = []
+    for c in TAXONOMY.categories:
+        chosen, _ = select_rules(RULES, c, "retail")
+        items.append({**c.summary(), "group_name": TAXONOMY.groups.get(c.group, c.group), "tags": sorted(c.tags),
+                      "laws": list(c.laws), "quantity": {"dims": list(c.dims), "ref": c.quantity_ref},
+                      "standards": c.standards or None, "rules": len(chosen)})
+    return {"version": TAXONOMY.version, "groups": [{"id": k, "name": v} for k, v in TAXONOMY.groups.items()],
+            "package_types": [{k: p[k] for k in ("id", "name", "ref") if k in p} for p in TAXONOMY.package_types],
+            "categories": items}
+
+
 @app.get("/rules")
-def rules() -> dict:
-    return {"rules": [{"id": r.id, "title": r.title, "reference": r.reference, "category": r.category,
-                       "severity": r.severity, "description": r.description} for r in RULES]}
+def rules(category: str | None = None, package_type: str = "retail") -> dict:
+    if category is None:
+        return {"rules": [_rule_json(r) for r in RULES]}
+    cat = TAXONOMY.get(category)
+    if cat is None:
+        raise HTTPException(status_code=404, detail={"code": "unknown_category", "message": f"No category '{category}'."})
+    chosen, skipped = select_rules(RULES, cat, package_type)
+    return {"category": cat.summary(), "laws": list(cat.laws), "package_type": package_type,
+            "rules": [_rule_json(r, cat) for r in chosen], "not_relevant": [r.id for r in skipped]}
 
 
 @app.post("/analyze")
@@ -104,6 +136,9 @@ async def analyze_endpoint(
     declared_quantity: str | None = Form(None),
     marker_mm: str | None = Form(None),
     source: str | None = Form(None),
+    category_id: str | None = Form(None, description="Inspector's category choice; omit to auto-detect"),
+    package_type: str | None = Form(None, description="retail / wholesale / institutional / export; omit to read from the label"),
+    pdp_area_cm2: str | None = Form(None, description="Measured principal display panel area for the Rule 7 font-size check"),
     x_api_key: str | None = Header(None),
 ):
     _check_key(x_api_key)
@@ -119,7 +154,7 @@ async def analyze_endpoint(
 
     context = {"case_code": case_code, "product_name": product_name, "brand": brand, "category": category,
                "declared_mrp": declared_mrp, "declared_quantity": declared_quantity, "marker_mm": marker_mm,
-               "source": source}
+               "source": source, "category_id": category_id, "package_type": package_type, "pdp_area_cm2": pdp_area_cm2}
     loop = asyncio.get_running_loop()
     try:
         deadline = time.monotonic() + settings.request_timeout_s

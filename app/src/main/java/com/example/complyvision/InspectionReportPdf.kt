@@ -277,6 +277,12 @@ object InspectionReportPdf {
             w.y += 32f
         }
         val meta = buildList {
+            r.classification?.let { c ->
+                add("Product category" to "${c.categoryName} (${when (c.source) { "inspector" -> "set by inspector"; "fallback" -> "not matched"
+                    else -> "auto, ${(c.confidence * 100).toInt()}%" }})")
+                add("Package type" to c.packageTypeName)
+                add("Rules applied" to "${c.rulesApplied} of ${c.rulesInCatalog} in the catalog")
+            }
             add("Analysed" to when_(summary?.createdAt ?: r.generatedAt))
             add("Rules" to "${r.passed} passed • ${r.failed} failed • ${r.review} review • ${r.notApplicable} N/A")
             add("Score" to fmtPct(r.score))
@@ -289,17 +295,27 @@ object InspectionReportPdf {
             if (summary != null) add("Source" to "${summary.source} • analyzer ${summary.analyzerVersion.ifBlank { r.analyzerVersion }}")
         }
         grid(w, meta, 2)
+        r.classification?.takeIf { it.laws.isNotEmpty() }?.let { c ->
+            w.ensure(20f)
+            textBlock(w, "Standards applied: " + c.laws.joinToString("; "), p(8f, MUTED), M, CW, 10.5f)
+            if (c.gate.isNotBlank()) textBlock(w, c.gate, p(8f, AMBER, bold = true), M, CW, 10.5f)
+            w.y += 2f
+        }
         if (r.headline.isNotBlank()) {
             w.ensure(20f)
             textBlock(w, r.headline, p(9f, statusColor(r.verdict), bold = true), M, CW, 12f)
             w.y += 4f
         }
 
+        val sectionOrder = r.rules.map { it.section }.distinct()
         table(
             w,
             listOf(Col("Rule", 0.55f), Col("Requirement", 1.7f), Col("Result", 0.6f, Paint.Align.CENTER), Col("Finding", 2.2f), Col("Evidence", 0.6f)),
-            r.rules.map { listOf(it.id, it.title + if (it.reference.isNotBlank()) "\n${it.reference}" else "", statusText(it.status),
-                it.reason + (if (it.found.isNotBlank()) "\nFound: ${it.found}" else "") + (if (it.expected.isNotBlank() && it.status != RuleStatus.PASS) "\nExpected: ${it.expected}" else ""),
+            r.rules.sortedBy { sectionOrder.indexOf(it.section) }.map { listOf(it.id,
+                it.title + (if (it.section.isNotBlank()) "\n[${it.section}]" else "") + if (it.reference.isNotBlank()) "\n${it.reference}" else "",
+                statusText(it.status),
+                it.reason + (if (it.found.isNotBlank()) "\nFound: ${it.found}" else "") + (if (it.expected.isNotBlank() && it.status != RuleStatus.PASS) "\nExpected: ${it.expected}" else "") +
+                    (if (it.resolved) "\nSettled by ${it.resolvedBy} on the physical pack" else ""),
                 it.evidence.joinToString(", ").ifBlank { "—" }) },
             colour = { _, col, v -> if (col == 2) statusColor(when (v) { "PASS" -> RuleStatus.PASS; "FAIL" -> RuleStatus.FAIL; "REVIEW" -> RuleStatus.REVIEW; else -> RuleStatus.NA }) else null },
             size = 7.5f
@@ -447,7 +463,8 @@ object InspectionReportPdf {
             section(w, "Inspection details")
             caseDetails(w, k, r.inspector)
 
-            section(w, "Summary", "Each package photographed on site is analysed against ${r.full.catalog.size.takeIf { it > 0 } ?: 16} Legal Metrology rules. " +
+            section(w, "Summary", "Each package photographed on site is first categorised, then verified against the rules of its category " +
+                "(Legal Metrology, FSS, BIS and the other laws that govern it) from a catalog of ${r.full.catalog.size.takeIf { it > 0 } ?: 16} rules. " +
                 "A package fails if any rule fails, goes to review if any rule needs human confirmation, and passes otherwise.")
             kpis(w, k.scans)
 
@@ -500,8 +517,9 @@ object InspectionReportPdf {
 
             w.ensure(40f)
             w.y += 6f
-            textBlock(w, "Rule decisions are deterministic (prototype rule CSV + validators). AI insights are advisory and can only route a " +
-                "decision to human review - never pass a package. Package data and evidence are stored in Supabase with row-level security.",
+            textBlock(w, "Rule decisions are deterministic (category-aware rule catalog + validators). AI insights are advisory and can only route a " +
+                "decision to human review - never pass a package; only the inspector can settle a review item on the physical pack. " +
+                "Package data and evidence are stored in Supabase with row-level security.",
                 p(7.5f, FAINT), M, CW, 10f)
             w.finish()
             doc.writeTo(out)
