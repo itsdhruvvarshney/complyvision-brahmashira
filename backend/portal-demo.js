@@ -11,10 +11,25 @@ const authorities = [
 const inspectors = [
   { id: 'IN-HR-1192', name: 'A. Kumar', region: 'Haryana', status: 'active' },
   { id: 'IN-GJ-2804', name: 'S. Patel', region: 'Gujarat', status: 'active' },
+  { id: 'IN-DL-1736', name: 'N. Verma', region: 'Delhi', status: 'active' },
+  { id: 'IN-MH-4218', name: 'P. Deshmukh', region: 'Maharashtra', status: 'active' },
+  { id: 'IN-KA-3651', name: 'R. Nair', region: 'Karnataka', status: 'active' },
+  { id: 'IN-TN-5087', name: 'K. Subramanian', region: 'Tamil Nadu', status: 'active' },
+  { id: 'IN-WB-6143', name: 'S. Banerjee', region: 'West Bengal', status: 'active' },
+  { id: 'IN-RJ-7429', name: 'M. Singh', region: 'Rajasthan', status: 'active' },
 ]
 const cases = [
+  { id: 'CV-2026-1059', organizationId: 'org-aurora', organization: 'Aurora Personal Care', inspectionId: 'PRE-3059', product: 'Aloe Vera Body Lotion 300 ml', status: 'assigned_to_supreme', authorityId: 'SA-HR-01', inspectorId: null, submittedAt: '2026-10-31T08:30:00.000Z', result: null, remarks: '', timeline: [] },
+  { id: 'CV-2026-1057', organizationId: 'org-saffron', organization: 'Saffron Valley Foods', inspectionId: 'PRE-3057', product: 'Turmeric Powder 200 g', status: 'assigned_to_supreme', authorityId: 'SA-HR-01', inspectorId: null, submittedAt: '2026-10-30T11:15:00.000Z', result: null, remarks: '', timeline: [] },
+  { id: 'CV-2026-1054', organizationId: 'org-purehome', organization: 'PureHome Essentials', inspectionId: 'PRE-3054', product: 'Laundry Detergent 1 kg', status: 'assigned_to_supreme', authorityId: 'SA-HR-01', inspectorId: null, submittedAt: '2026-10-29T07:45:00.000Z', result: null, remarks: '', timeline: [] },
+  { id: 'CV-2026-1052', organizationId: 'org-harvest', organization: 'Harvest Basket Foods', inspectionId: 'PRE-3052', product: 'Millet Cookies 250 g', status: 'assigned_to_inspector', authorityId: 'SA-HR-01', inspectorId: 'IN-DL-1736', submittedAt: '2026-10-28T10:20:00.000Z', result: null, remarks: '', timeline: [] },
+  { id: 'CV-2026-1050', organizationId: 'org-vital', organization: 'VitalCare Laboratories', inspectionId: 'PRE-3050', product: 'Vitamin C Tablets 60 count', status: 'assigned_to_inspector', authorityId: 'SA-HR-01', inspectorId: 'IN-MH-4218', submittedAt: '2026-10-27T09:10:00.000Z', result: null, remarks: '', timeline: [] },
+  { id: 'CV-2026-1049', organizationId: 'org-naturefirst', organization: 'NatureFirst Organics', inspectionId: 'PRE-3049', product: 'Cold Pressed Mustard Oil 1 L', status: 'in_progress', authorityId: 'SA-HR-01', inspectorId: 'IN-KA-3651', submittedAt: '2026-10-26T12:00:00.000Z', result: null, remarks: '', timeline: [] },
   { id: 'CV-2026-1048', organizationId: 'org-northstar', organization: 'Northstar Foods Pvt Ltd', inspectionId: 'PRE-3048', product: 'Oat Drink 1 L', status: 'assigned_to_inspector', authorityId: 'SA-HR-01', inspectorId: 'IN-HR-1192', submittedAt: '2026-10-29T09:00:00.000Z', result: null, remarks: '', timeline: [] },
   { id: 'CV-2026-1046', organizationId: 'org-greenfield', organization: 'Greenfield Essentials', inspectionId: 'PRE-3046', product: 'Dishwash Liquid 500 ml', status: 'assigned_to_supreme', authorityId: 'SA-HR-01', inspectorId: null, submittedAt: '2026-10-28T09:00:00.000Z', result: null, remarks: '', timeline: [] },
+  { id: 'CV-2026-1044', organizationId: 'org-freshfields', organization: 'FreshFields Dairy', inspectionId: 'PRE-3044', product: 'Pasteurised Toned Milk 1 L', status: 'in_progress', authorityId: 'SA-HR-01', inspectorId: 'IN-TN-5087', submittedAt: '2026-10-24T08:40:00.000Z', result: null, remarks: '', timeline: [] },
+  { id: 'CV-2026-1043', organizationId: 'org-citrus', organization: 'Citrus & Co.', inspectionId: 'PRE-3043', product: 'Orange Surface Cleaner 500 ml', status: 'passed', authorityId: 'SA-HR-01', inspectorId: 'IN-WB-6143', submittedAt: '2026-10-23T10:30:00.000Z', result: 'passed', remarks: 'Mandatory declarations and pack details verified.', timeline: [] },
+  { id: 'CV-2026-1042', organizationId: 'org-sunrise', organization: 'Sunrise Nutrition', inspectionId: 'PRE-3042', product: 'Protein Mix 500 g', status: 'failed', authorityId: 'SA-HR-01', inspectorId: 'IN-RJ-7429', submittedAt: '2026-10-22T09:50:00.000Z', result: 'failed', remarks: 'Net quantity declaration was not legible on the submitted label.', timeline: [] },
   { id: 'CV-2026-1047', organizationId: 'org-greenfield', organization: 'Greenfield Essentials', inspectionId: 'PRE-3047', product: 'Herbal Shampoo 200 ml', status: 'submitted', authorityId: null, inspectorId: null, submittedAt: '2026-10-30T09:00:00.000Z', result: null, remarks: '', timeline: [] },
   { id: 'CV-2026-1041', organizationId: 'org-northstar', organization: 'Northstar Foods Pvt Ltd', inspectionId: 'PRE-3041', product: 'Breakfast Cereal 500 g', status: 'passed', authorityId: 'SA-HR-01', inspectorId: 'IN-GJ-2804', submittedAt: '2026-10-25T09:00:00.000Z', result: 'passed', remarks: 'Declarations reviewed.', timeline: [] },
   { id: 'CV-2026-1038', organizationId: 'org-daily', organization: 'Daily Harvest Co.', inspectionId: 'PRE-3038', product: 'Ground Coffee 250 g', status: 'failed', authorityId: 'SA-TN-02', inspectorId: 'IN-GJ-2804', submittedAt: '2026-10-20T09:00:00.000Z', result: 'failed', remarks: 'Required declaration was not visible.', timeline: [] },
@@ -72,7 +87,7 @@ router.get('/dashboard', requireRole('supreme', 'inspector', 'legal_metrology', 
   const scoped = currentRole === 'inspector'
     ? (cases.filter((item) => item.inspectorId === actorId(req)).length ? cases.filter((item) => item.inspectorId === actorId(req)) : cases.filter((item) => item.inspectorId && !['passed', 'failed'].includes(item.status)))
     : currentRole === 'supreme'
-      ? (cases.filter((item) => item.authorityId === actorId(req)).length ? cases.filter((item) => item.authorityId === actorId(req)) : cases.filter((item) => item.authorityId && !['passed', 'failed'].includes(item.status)))
+      ? (cases.filter((item) => item.authorityId === actorId(req)).length ? cases.filter((item) => item.authorityId === actorId(req)) : cases.filter((item) => item.authorityId))
       : currentRole === 'organisation'
         ? cases.filter((item) => item.organizationId === actorId(req))
         : cases
@@ -83,7 +98,7 @@ router.get('/dashboard', requireRole('supreme', 'inspector', 'legal_metrology', 
 router.get('/cases', requireRole('supreme', 'inspector', 'legal_metrology', 'organisation'), (req, res) => {
   const currentRole = role(req)
   const scoped = currentRole === 'inspector' ? (cases.filter((item) => item.inspectorId === actorId(req)).length ? cases.filter((item) => item.inspectorId === actorId(req)) : cases.filter((item) => item.inspectorId && !['passed', 'failed'].includes(item.status)))
-    : currentRole === 'supreme' ? (cases.filter((item) => item.authorityId === actorId(req)).length ? cases.filter((item) => item.authorityId === actorId(req)) : cases.filter((item) => item.authorityId && !['passed', 'failed'].includes(item.status)))
+    : currentRole === 'supreme' ? (cases.filter((item) => item.authorityId === actorId(req)).length ? cases.filter((item) => item.authorityId === actorId(req)) : cases.filter((item) => item.authorityId))
       : currentRole === 'organisation' ? cases.filter((item) => item.organizationId === actorId(req)) : cases
   const status = String(req.query.status || '')
   const q = String(req.query.q || '').toLowerCase()

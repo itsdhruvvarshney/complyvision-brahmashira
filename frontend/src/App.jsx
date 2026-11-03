@@ -62,7 +62,7 @@ function App() {
     if (demoMode || !supabaseConfigured) { sessionStorage.setItem('cv-demo-authenticated', 'true'); setDemoAuthenticated(true) }
   }} />
   if (page === 'login') return login
-  if (page === 'home') return <HomePage />
+  if (page === 'home') return <HomePage authenticated={authenticated} user={session?.user} />
   if (authLoading) return <main className="login-page" role="status">Checking your sign-in…</main>
   if (!authenticated) { if (page !== 'login') window.location.hash = '/login'; return login }
   if (page === 'dashboard/supreme' && role !== 'supreme') { window.location.hash = role === 'organisation' ? '/dashboard' : '/dashboard/inspector'; return null }

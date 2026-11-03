@@ -5,14 +5,14 @@ import { Workflow } from '../components/Workflow'
 import { HeroDecorations } from '../components/HeroDecorations'
 import { PortalFooter } from '../components/PortalFooter'
 
-export function HomePage() {
+export function HomePage({ authenticated = false, user }) {
   return (
     <main className="site-shell">
       <a className="skip-link" href="#demo">Skip to inspection workspace</a>
       <div className="page-grid" aria-hidden="true" />
       <HeroDecorations />
       <div className="site-container">
-        <Header />
+        <Header authenticated={authenticated} user={user} />
         <Hero />
         <ul className="audience-list" aria-label="Designed for">
           <li>Low-vision shoppers</li>
